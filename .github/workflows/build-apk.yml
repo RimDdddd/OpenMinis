@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - name: Checkout (with submodules: deps/proot)
+            - name: Checkout with submodules (deps/proot)
         uses: actions/checkout@v4
         with:
           submodules: recursive
