@@ -48,7 +48,9 @@ def main():
     imports_add = imports_anchor + (
         "import androidx.activity.compose.rememberLauncherForActivityResult\n"
         "import androidx.activity.result.contract.ActivityResultContracts\n"
-        "import androidx.compose.material.icons.outlined.Image\n"
+        # 注意：本文件已 import androidx.compose.foundation.Image，
+        # 再 import material.icons.outlined.Image 会撞简单名（conflicting import）。
+        # 图标改用文件里已导入的 ChatBubbleOutline。
     )
 
     const_anchor = 'const val KEY_LANGUAGE = "app_language"\n'
@@ -103,7 +105,7 @@ def main():
         '            footer = "选一张图垫在消息底下，只存在本机。",\n'
         "        ) {\n"
         "            SettingsRow(\n"
-        "                icon = Icons.Outlined.Image,\n"
+        "                icon = Icons.Outlined.ChatBubbleOutline,\n"
         "                iconColor = tileBlue,\n"
         '                title = if (chatBackgroundUri.isEmpty()) "选择背景图片" else "更换背景图片",\n'
         '                subtitle = if (chatBackgroundUri.isEmpty()) "未设置" else "已设置",\n'
