@@ -52,13 +52,9 @@ def main():
 
     # ---------- 1) AppearanceScreen.kt ----------
     imports_anchor = "import androidx.compose.runtime.setValue\n"
-    # 注意：AppearanceScreen 已经 import 了 androidx.compose.foundation.Image，
-    # 再 import material.icons.outlined.Image 会撞简单名（conflicting import），
-    # 所以这里复用文件里已经导入的 ChatBubbleOutline 当图标。
-    imports_add = imports_anchor + (
-        "import androidx.activity.compose.rememberLauncherForActivityResult\n"
-        "import androidx.activity.result.contract.ActivityResultContracts\n"
-    )
+    # 一个 import 都不加：文件里可能已经被别的补丁 import 过同样的名字
+    # （重复 import 会让 Kotlin 报 "Conflicting import ... is ambiguous"），
+    # 所以下面统一用全限定名调 rememberLauncherForActivityResult / ActivityResultContracts。
 
     const_anchor = 'const val KEY_LANGUAGE = "app_language"\n'
     const_add = const_anchor + (
@@ -82,8 +78,8 @@ def main():
     state_add = state_anchor + (
         "    // [wechat-avatar-patch] 聊天里「我」那一侧的头像\n"
         '    var chatAvatarUserUri by remember { mutableStateOf(prefs.getString(KEY_CHAT_AVATAR_USER_URI, "") ?: "") }\n'
-        "    val avatarPicker = rememberLauncherForActivityResult(\n"
-        "        ActivityResultContracts.OpenDocument()\n"
+        "    val avatarPicker = androidx.activity.compose.rememberLauncherForActivityResult(\n"
+        "        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()\n"
         "    ) { uri ->\n"
         "        if (uri != null) {\n"
         "            try {\n"
@@ -133,7 +129,6 @@ def main():
     )
 
     patch(appearance, [
-        (imports_anchor, imports_add),
         (const_anchor, const_add),
         (helper_anchor, helper_add),
         (state_anchor, state_add),
