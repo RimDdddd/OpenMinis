@@ -1,1 +1,98 @@
+name: Build Minis APK (custom patches)
 
+# 在云端把打了个人补丁的 OpenMinis 编译成 debug APK。
+# 目前带三个补丁：
+#   1) 聊天背景图          —— apply_chat_background.py
+#   2) file_edit 丢写修复  —— apply_atomic_file_write.py
+#   3) 微信式聊天头像      —— apply_wechat_avatar.py
+# 手动触发：仓库 Actions 页 → 选这个 workflow → Run workflow。
+# 产物在本次运行的 Artifacts 里（minis-custom-debug-apk）。
+#
+# 说明：官方仓库自己没有 CI，这是为个性化构建新加的。
+# 首次构建要编 proot / Alpine rootfs / rclone，约 30–60 分钟；
+# 之后的构建会走 Gradle 缓存，快很多。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout with submodules (deps/proot)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install Android SDK packages (platform 36 / NDK r28 / CMake)
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "SDK=$SDK"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.0.12433566" \
+            "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$SDK/ndk/28.0.12433566" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$SDK/ndk/28.0.12433566" >> "$GITHUB_ENV"
+
+      - name: Apply chat-background patch
+        run: python3 apply_chat_background.py .
+
+      - name: Apply atomic file-write patch (file_edit / file_write)
+        run: python3 apply_atomic_file_write.py .
+
+      - name: Apply wechat-style chat avatar patch
+        run: python3 apply_wechat_avatar.py .
+
+      - name: Apply stable signing patch (same key every build)
+        run: python3 apply_stable_signing.py .
+
+      - name: Check signing keystore
+        run: |
+          if [ -f src/android/.signing/debug.keystore ]; then
+            echo "keystore: 仓库内固定签名 key 已就位"
+          else
+            echo "::warning::没找到 src/android/.signing/debug.keystore，本次构建用手工随机签名 key，装新版仍需卸载旧版"
+          fi
+
+      - name: Build native deps (proot + loaders)
+        run: ./deps/build_proot.sh
+
+      - name: Build Alpine rootfs
+        run: ./scripts/prepare_android_sandbox.sh
+
+      - name: Build rclone AAR (gomobile)
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          gomobile init
+          ./deps/build_rclone_android.sh
+          mkdir -p src/android/app/libs
+          cp deps/build/rclone/rclone.aar src/android/app/libs/
+
+      - name: Build debug APK
+        working-directory: src/android
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: minis-custom-debug-apk
+          path: src/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
