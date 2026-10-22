@@ -157,6 +157,7 @@ class MinisApp : Application(), ImageLoaderFactory {
     lateinit var mcpRepository: MCPRepository
         private set
     lateinit var memoryRepository: MemoryRepository
+        private set
 
     /**
      * [T-private-longterm] Memory repositories for the NON-default characters,
@@ -182,7 +183,7 @@ class MinisApp : Application(), ImageLoaderFactory {
             )
         }
     }
-        private set
+
     lateinit var webAppShortcutRepository: WebAppShortcutRepository
         private set
     lateinit var backgroundSettingsRepository: BackgroundSettingsRepository
