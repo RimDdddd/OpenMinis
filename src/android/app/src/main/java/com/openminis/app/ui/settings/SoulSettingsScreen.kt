@@ -7,6 +7,8 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -59,7 +61,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.openminis.app.MinisApp
 import com.openminis.app.R
+import com.openminis.app.data.db.PersonaEntity
 import com.openminis.app.ui.components.MinisButton
 import com.openminis.app.ui.components.MinisOutlinedButton
 import com.openminis.app.ui.components.MinisTextButton
@@ -73,6 +77,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 /**
  * [T-soul-md] Settings page for editing SOUL.md. Mirrors iOS
@@ -93,6 +98,20 @@ import kotlinx.coroutines.withContext
 fun SoulSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // [T-persona-phase1] Which character this page is editing.
+    // `null` = the built-in default character (米米), whose files stay at
+    // `minis-global/memory/` — picking it is exactly the pre-persona page.
+    val personaDao = remember { (context.applicationContext as MinisApp).database.personaDao() }
+    var selectedPersonaId by remember { mutableStateOf<String?>(null) }
+    var personas by remember { mutableStateOf<List<PersonaEntity>>(emptyList()) }
+    var personaReload by remember { mutableStateOf(0) }
+    var showNewPersonaDialog by remember { mutableStateOf(false) }
+    var newPersonaName by remember { mutableStateOf("") }
+    var showDeletePersonaDialog by remember { mutableStateOf(false) }
+    // Shown when the user taps another character while this one has unsaved
+    // edits. Cheaper and less destructive than silently discarding the typing.
+    var switchBlocked by remember { mutableStateOf(false) }
 
     var name by remember { mutableStateOf(SoulMetadata.DEFAULT.name) }
     var style by remember { mutableStateOf(SoulMetadata.DEFAULT.style) }
@@ -159,10 +178,12 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
     // Initial load + (defensive) ensureExists. The Application-level call
     // already seeded on first run, but loading from a freshly cleared app
     // shouldn't crash.
-    LaunchedEffect(Unit) {
+    LaunchedEffect(selectedPersonaId) {
+        loaded = false
         val parsed = withContext(Dispatchers.IO) {
-            SoulStore.ensureExists(context)
-            SoulStore.load(context) ?: SoulMDParser.parse(SoulStore.DEFAULT_CONTENT)
+            SoulStore.ensureExists(context, selectedPersonaId)
+            SoulStore.load(context, selectedPersonaId)
+                ?: SoulMDParser.parse(SoulStore.DEFAULT_CONTENT)
         }
         name = parsed.metadata.name
         preservedEmoji = parsed.metadata.emoji
@@ -191,6 +212,10 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
         loaded = true
     }
 
+    LaunchedEffect(personaReload) {
+        personas = withContext(Dispatchers.IO) { personaDao.getAll() }
+    }
+
     // Language-aware length check used by both the editor counter and the
     // Save button's enabled state. See [SoulStore.isOverLimit] for the rule.
     val bodyLimitCheck by remember(body) { derivedStateOf { SoulStore.isOverLimit(body) } }
@@ -211,7 +236,20 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
     val save: () -> Unit = {
         scope.launch {
             try {
-                withContext(Dispatchers.IO) { SoulStore.save(context, currentFile) }
+                withContext(Dispatchers.IO) {
+                    SoulStore.save(context, currentFile, selectedPersonaId)
+                    // [T-persona-phase1] The name typed in the editor is the
+                    // display name everywhere else (session header, persona
+                    // chips). Keep the personas row in step on save rather
+                    // than adding a second "rename" surface.
+                    val id = selectedPersonaId
+                    if (id != null) {
+                        val row = personaDao.getById(id)
+                        if (row != null && row.name != name.trim()) {
+                            personaDao.upsert(row.copy(name = name.trim()))
+                        }
+                    }
+                }
                 onBack()
             } catch (t: Throwable) {
                 saveError = t.message ?: "save failed"
@@ -241,6 +279,26 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
             ) { Text(stringResource(R.string.soul_save)) }
         },
     ) {
+        // [T-persona-phase1] Character switcher. The default character has no
+        // row in `personas`, so it is rendered as a fixed first chip.
+        PersonaBar(
+            personas = personas,
+            selectedPersonaId = selectedPersonaId,
+            blocked = switchBlocked,
+            onSelect = { id ->
+                if (isDirty) {
+                    switchBlocked = true
+                } else {
+                    switchBlocked = false
+                    selectedPersonaId = id
+                }
+            },
+            onCreate = {
+                if (isDirty) switchBlocked = true else { switchBlocked = false; showNewPersonaDialog = true }
+            },
+            onDelete = { showDeletePersonaDialog = true },
+        )
+
         SettingsSection(
             header = stringResource(R.string.soul_section_preview),
         ) {
@@ -494,6 +552,176 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
             onDismiss = { showEmojiSheet = false },
             onPick = { chosen -> icon = chosen; showEmojiSheet = false },
         )
+    }
+
+    if (showNewPersonaDialog) {
+        AlertDialog(
+            onDismissRequest = { showNewPersonaDialog = false },
+            title = { Text("新角色") },
+            text = {
+                OutlinedTextField(
+                    value = newPersonaName,
+                    onValueChange = { newPersonaName = it },
+                    label = { Text("名字") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                MinisTextButton(
+                    onClick = {
+                        val nm = newPersonaName.trim()
+                        if (nm.isEmpty()) return@MinisTextButton
+                        showNewPersonaDialog = false
+                        newPersonaName = ""
+                        scope.launch {
+                            val id = UUID.randomUUID().toString()
+                            withContext(Dispatchers.IO) {
+                                personaDao.upsert(
+                                    PersonaEntity(
+                                        id = id,
+                                        name = nm,
+                                        icon = null,
+                                        createdAt = System.currentTimeMillis(),
+                                        sortOrder = (personaDao.getAll().maxOfOrNull { it.sortOrder } ?: 0) + 1,
+                                    ),
+                                )
+                                // Start from an EMPTY body: copying the default
+                                // character's SOUL would make the new character
+                                // a clone of 米米, which is precisely what the
+                                // first hand-written persona must not be.
+                                SoulStore.save(
+                                    context,
+                                    SoulFile(
+                                        SoulMetadata(
+                                            name = nm,
+                                            emoji = "",
+                                            icon = "",
+                                            style = "",
+                                            lang = "auto",
+                                        ),
+                                        "",
+                                    ),
+                                    id,
+                                )
+                                SoulStore.refreshCache(context, id)
+                            }
+                            personaReload++
+                            selectedPersonaId = id
+                        }
+                    },
+                    enabled = newPersonaName.isNotBlank(),
+                ) { Text("创建") }
+            },
+            dismissButton = {
+                MinisTextButton(onClick = { showNewPersonaDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
+    if (showDeletePersonaDialog) {
+        val targetId = selectedPersonaId
+        val targetName = personas.firstOrNull { it.id == targetId }?.name.orEmpty()
+        AlertDialog(
+            onDismissRequest = { showDeletePersonaDialog = false },
+            title = { Text("删除「$targetName」") },
+            text = { Text("她的 SOUL、日记和头像都会一起删掉，绑在她身上的会话会退回默认角色。这一步不能撤销。") },
+            confirmButton = {
+                MinisTextButton(
+                    onClick = {
+                        showDeletePersonaDialog = false
+                        if (targetId == null) return@MinisTextButton
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                val app = context.applicationContext as MinisApp
+                                // Sessions must not keep pointing at a row that
+                                // no longer exists — they fall back to the
+                                // default character instead.
+                                app.database.chatDao().detachPersonaFromSessions(targetId)
+                                personaDao.deleteById(targetId)
+                                SoulStore.personaMemoryDir(context, targetId).deleteRecursively()
+                                SoulStore.refreshCache(context, targetId)
+                            }
+                            personaReload++
+                            selectedPersonaId = null
+                        }
+                    },
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                MinisTextButton(onClick = { showDeletePersonaDialog = false }) { Text("取消") }
+            },
+        )
+    }
+}
+
+/**
+ * [T-persona-phase1] Horizontal character switcher shown above the SOUL editor.
+ *
+ * The default character is a fixed first chip rather than a `personas` row, so
+ * "no row" and "the built-in one" cannot drift apart.
+ */
+@Composable
+private fun PersonaBar(
+    personas: List<PersonaEntity>,
+    selectedPersonaId: String?,
+    blocked: Boolean,
+    onSelect: (String?) -> Unit,
+    onCreate: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    SettingsSection(header = "角色") {
+        Column(modifier = Modifier.padding(vertical = 10.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PersonaChip(
+                    label = "米米（默认）",
+                    selected = selectedPersonaId == null,
+                    onClick = { onSelect(null) },
+                )
+                personas.forEach { p ->
+                    PersonaChip(
+                        label = p.name.ifBlank { "未命名" },
+                        selected = selectedPersonaId == p.id,
+                        onClick = { onSelect(p.id) },
+                    )
+                }
+                PersonaChip(label = "＋ 新角色", selected = false, onClick = onCreate)
+            }
+            if (blocked) {
+                Text(
+                    text = "有没保存的改动，先保存再切角色。",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+            if (selectedPersonaId != null) {
+                MinisTextButton(onClick = onDelete) {
+                    Text("删除这个角色", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PersonaChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val bg = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+    val fg = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+    ) {
+        Text(text = label, color = fg, fontSize = 14.sp)
     }
 }
 
