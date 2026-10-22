@@ -1098,7 +1098,7 @@ class SessionListViewModel(
         var id = "__new__${java.util.UUID.randomUUID()}"
         if (groupId != null) id += "__grp__$groupId"
         if (folderId != null) id += "__fld__$folderId"
-        if (personaId != null) id += "__psn__$personaId"
+        id = com.openminis.app.data.PersonaDraftIds.encode(id, personaId)
         return id
     }
 

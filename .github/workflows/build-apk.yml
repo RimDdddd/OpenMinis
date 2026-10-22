@@ -96,3 +96,16 @@ jobs:
           name: minis-custom-debug-apk
           path: src/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      # [T-persona-phase1] Room writes the schema json for a bumped version into
+      # the source tree during compilation. Without it committed, the androidTest
+      # migration suite cannot validate 14 -> 15 (it looks the file up by
+      # version). Uploaded rather than committed from CI so the build stays a
+      # pure function of the ref it was started on.
+      - name: Upload Room schemas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-schemas
+          path: src/android/app/schemas
+          if-no-files-found: warn

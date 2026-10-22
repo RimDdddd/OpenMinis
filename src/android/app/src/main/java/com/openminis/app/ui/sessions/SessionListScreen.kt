@@ -604,6 +604,18 @@ fun SessionListScreen(
     // behaviour and never asks a question the user cannot answer.
     var showPersonaPicker by remember { mutableStateOf(false) }
     var personaPickerList by remember { mutableStateOf<List<PersonaEntity>>(emptyList()) }
+
+    // [T-persona-phase1] Keep the row badges fed. Cheap (a few rows) and only
+    // on entry; the Soul screen refreshes it after a create/rename/delete.
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                com.openminis.app.data.PersonaCache.refresh(
+                    (context.applicationContext as MinisApp).database.personaDao(),
+                )
+            }
+        }
+    }
     val isDark = ChatColors.isDark
 
     // [T-android-search-focus-sticky] When the user opens search but types
@@ -3032,24 +3044,47 @@ private fun SessionRow(
             verticalArrangement = Arrangement.spacedBy(1.dp),
         ) {
             val titleText = session.title ?: "New Chat"
-            if (searchQuery.isNotBlank()) {
-                Text(
-                    text = highlightedAnnotatedString(titleText, searchQuery),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            } else {
-                Text(
-                    text = titleText,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            // [T-persona-phase1] Which character this chat belongs to. Only
+            // shown for a non-default one: every pre-persona session has
+            // persona_id = NULL, and a badge on all of them would be noise.
+            val personaNames by com.openminis.app.data.PersonaCache.byId.collectAsState()
+            val speakerLabel = session.personaId?.let { personaNames[it]?.name }?.takeIf { it.isNotBlank() }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (searchQuery.isNotBlank()) {
+                    Text(
+                        text = highlightedAnnotatedString(titleText, searchQuery),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                } else {
+                    Text(
+                        text = titleText,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
+                if (speakerLabel != null) {
+                    Text(
+                        text = speakerLabel,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .padding(start = 6.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
             }
             // During an active search, prefer the matched message snippet
             // (content hit) over the generic lastMessage preview. Falls back

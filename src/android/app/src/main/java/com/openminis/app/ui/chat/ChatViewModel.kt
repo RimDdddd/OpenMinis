@@ -139,7 +139,7 @@ class ChatViewModel(
      * default character.
      */
     private val draftPersonaId: String? =
-        sessionId.substringAfter("__psn__", "").takeIf { it.isNotEmpty() }
+        com.openminis.app.data.PersonaDraftIds.fromDraftId(sessionId)
 
     private val _personaId = MutableStateFlow(initialPersonaId ?: draftPersonaId)
 
@@ -13445,6 +13445,12 @@ class ChatViewModel(
             memoryEnabled = false,
             parentSessionId = parentSid,
             parentToolUseId = toolId,
+            // [T-persona-phase1] A delegated task runs as the character whose
+            // turn spawned it. Inheriting from the PARENT ROW (not from this
+            // view model's field) also covers the queued path, where the row
+            // is the only surviving record of who asked. A parent with no
+            // persona (NULL) passes NULL on, i.e. the default character.
+            personaId = parentRow?.personaId,
         )
         parentRow?.source?.let { chatRepository.dao.updateSource(child.id, it) }
         resolution.bindingJson?.let { chatRepository.updateSessionBinding(child.id, it, resolution.seedModelId) }

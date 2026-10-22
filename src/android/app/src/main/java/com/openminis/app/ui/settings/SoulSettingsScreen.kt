@@ -214,6 +214,10 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
 
     LaunchedEffect(personaReload) {
         personas = withContext(Dispatchers.IO) { personaDao.getAll() }
+        // [T-persona-phase1] The session list renders these names from the
+        // cache; a create/rename/delete here must not leave a stale label
+        // behind on the other screen.
+        com.openminis.app.data.PersonaCache.set(personas)
     }
 
     // Language-aware length check used by both the editor counter and the

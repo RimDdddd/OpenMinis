@@ -735,6 +735,7 @@ class BackupImporter(
                     com.openminis.app.agent.SoulStore.ensureExists(context, p.id)
                 }
                 com.openminis.app.agent.SoulStore.refreshCache(context)
+                com.openminis.app.data.PersonaCache.set(dao.getAll())
             }.onFailure {
                 com.openminis.app.logging.AppLogger.warning("BackupImporter", "persona restore failed: ${it.message}")
             }
