@@ -122,8 +122,20 @@ interface ChatDao {
     @Query("UPDATE sessions SET model_binding = :binding, model_id = :modelId, updated_at = :updatedAt WHERE id = :id")
     suspend fun updateSessionBinding(id: String, binding: String, modelId: String, updatedAt: Long = System.currentTimeMillis())
 
-    @Query("DELETE FROM sessions WHERE id = :id")
-    suspend fun deleteSession(id: String)
+    /**
+     * [T-persona-phase1] Re-bind a session to another persona. NULL = the
+     * built-in default character. Does NOT bump `updated_at`: re-binding a
+     * character is a configuration change, not a message, and the session list
+     * would otherwise reorder itself for no visible reason.
+     */
+    @Query("UPDATE sessions SET persona_id = :personaId WHERE id = :id")
+    suspend fun updateSessionPersona(id: String, personaId: String?)
+
+    /** [T-persona-phase1] Sessions pointing at a persona that is being deleted. */
+    @Query("UPDATE sessions SET persona_id = NULL WHERE persona_id = :personaId")
+    suspend fun detachPersonaFromSessions(personaId: String)
+
+    @Query("DELETE FROM sessions WHERE id = :id")    suspend fun deleteSession(id: String)
 
     /** [T-p1-delegate-task] Children of a parent, for cascade delete. */
     @Query("SELECT id FROM sessions WHERE parent_session_id = :parentId")

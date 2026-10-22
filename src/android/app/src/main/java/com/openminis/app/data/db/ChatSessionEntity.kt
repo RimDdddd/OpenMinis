@@ -81,6 +81,19 @@ data class ChatSessionEntity(
     /** The parent's `delegate_task` tool_use id that spawned this child, or
      *  null for a child created by `minis-scheduled --target child-of-current`. */
     @ColumnInfo(name = "parent_tool_use_id") val parentToolUseId: String? = null,
+    /**
+     * [T-persona-phase1] Which persona this session speaks as. NULL = the
+     * built-in default character (米米), whose SOUL / diary live at the
+     * historical paths — this is what every pre-persona session is, so old
+     * sessions keep their exact behaviour without a data rewrite.
+     *
+     * No @ForeignKey, same reasoning as [folderId]: the persona a session
+     * points at can legitimately be missing right after a partial restore, and
+     * the right response there is to fall back to the default character, not to
+     * fail a constraint or hide the session. Deleting a persona is an explicit
+     * reassign-to-default in the repository layer.
+     */
+    @ColumnInfo(name = "persona_id") val personaId: String? = null,
 ) {
     val isChild: Boolean get() = parentSessionId != null
 }

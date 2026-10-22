@@ -26,6 +26,10 @@ class ChatRepository(internal val dao: ChatDao) {
         // [T-p1-delegate-task] Non-null makes this a hidden child session.
         parentSessionId: String? = null,
         parentToolUseId: String? = null,
+        // [T-persona-phase1] NULL = the built-in default character. Callers that
+        // predate personas keep omitting it and land on the default, which is
+        // the pre-phase-one behaviour verbatim.
+        personaId: String? = null,
     ): ChatSessionEntity {
         val now = System.currentTimeMillis()
         val session = ChatSessionEntity(
@@ -34,6 +38,7 @@ class ChatRepository(internal val dao: ChatDao) {
             modelId = modelId,
             parentSessionId = parentSessionId,
             parentToolUseId = parentToolUseId,
+            personaId = personaId,
             createdAt = now,
             updatedAt = now,
             memoryEnabled = if (memoryEnabled) 1 else 0,

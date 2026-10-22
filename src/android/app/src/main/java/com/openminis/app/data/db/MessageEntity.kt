@@ -61,4 +61,17 @@ data class MessageEntity(
     @ColumnInfo(name = "provider_type") val providerType: String? = null,
     /** Diagnostics / disambiguation only — the UI never resolves through it. */
     @ColumnInfo(name = "provider_instance_id") val providerInstanceId: String? = null,
+    /**
+     * [T-persona-phase1] Which character spoke this turn in a multi-persona
+     * (group) session. NULL = "the session's own persona" — what every row
+     * written before phase two is, and what every single-persona session keeps
+     * writing.
+     *
+     * Phase one puts the column down but never writes it; phase two's group
+     * chat fills it for the turns of the second character so a reload can still
+     * tell the two apart. Deliberately not a @ForeignKey — a persona deleted
+     * while its old messages remain simply renders as "unknown speaker", which
+     * is a display fallback, not corruption.
+     */
+    @ColumnInfo(name = "speaker_id") val speakerId: String? = null,
 )

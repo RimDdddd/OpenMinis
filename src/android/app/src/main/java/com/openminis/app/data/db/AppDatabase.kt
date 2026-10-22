@@ -14,8 +14,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CompactMarkerEntity::class,
         WebAppShortcutEntity::class,
         FolderEntity::class,
+        PersonaEntity::class,
     ],
-    version = 14,
+    version = 15,
     // [T-android-downgrade-compat] Kept ON so MigrationTestHelper and CI can
     // validate every migration (and its downgrade counterpart) against the
     // committed schema json. Without it the upgrade/downgrade chain has no
@@ -25,6 +26,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 abstract class AppDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
     abstract fun webAppShortcutDao(): WebAppShortcutDao
+    abstract fun personaDao(): PersonaDao
 
     companion object {
         @Volatile
@@ -376,8 +378,66 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        fun getInstance(context: Context): AppDatabase {
-            return INSTANCE ?: synchronized(this) {
+        /**
+         * [T-persona-phase1] Multi-persona data layer. Adds the `personas`
+         * table plus `sessions.persona_id` and `messages.speaker_id`.
+         *
+         * Purely additive, and every column added is nullable with NO default:
+         *
+         * - `sessions.persona_id = NULL` means "the built-in default character"
+         *   — which is exactly what every pre-migration session is, so no row
+         *   is rewritten and behaviour is unchanged even before any UI knows
+         *   about personas.
+         * - `messages.speaker_id = NULL` means "whoever the session's persona
+         *   is". Phase one never writes it; phase two (group chat) will, to
+         *   attribute the second character's turns. Laying the column down now
+         *   means the group-chat patch needs no second migration.
+         *
+         * `personas` columns must match [PersonaEntity] byte for byte: Room
+         * compares the live schema (including declared DEFAULT values) against
+         * the entity on open. None of these columns declares a DEFAULT, and
+         * `icon` is nullable, so the CREATE TABLE below declares neither.
+         */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS personas (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        icon TEXT,
+                        created_at INTEGER NOT NULL,
+                        sort_order INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("ALTER TABLE sessions ADD COLUMN persona_id TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN speaker_id TEXT")
+            }
+        }
+
+        /**
+         * [T-persona-phase1] Downgrade 15 → 14. Deliberately a NO-OP, same
+         * contract as [MIGRATION_12_11].
+         *
+         * An older build does not declare `personas` / `persona_id` /
+         * `speaker_id`, and Room's open-time validation only compares the
+         * tables and columns its own entities ask for — a table or column it
+         * does not know about is ignored (DAOs bind by name, never by position,
+         * and old INSERTs simply omit the new columns).
+         *
+         * Dropping `personas` instead would destroy the users' characters on a
+         * downgrade-then-upgrade round trip, which is precisely what this
+         * project's no-data-loss rule forbids. The cost of leaving them is a
+         * few hundred bytes.
+         */
+        val MIGRATION_15_14 = object : Migration(15, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Intentionally empty. See the doc comment above.
+            }
+        }
+
+        fun getInstance(context: Context): AppDatabase {            return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
@@ -391,6 +451,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_12, MIGRATION_12_11,
                         MIGRATION_13_14, MIGRATION_14_13,
+                        MIGRATION_14_15, MIGRATION_15_14,
                     )
                     .build()
                     .also { INSTANCE = it }
