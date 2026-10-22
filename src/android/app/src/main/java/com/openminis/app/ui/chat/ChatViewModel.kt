@@ -5856,6 +5856,31 @@ class ChatViewModel(
     private val recentlyFailedEntryIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     init {
+        // [T-persona-phase1] Adopt this session's character as early as
+        // possible, INDEPENDENTLY of loadSession's sequencing.
+        //
+        // Why a second path: loadSession also reads the row, but it is a long
+        // coroutine that can return early (draft id, safe mode, a failed read)
+        // and everything that builds the prompt or picks the memory directory
+        // reads `_personaId` at call time. A session that was created as 妙妙
+        // and then loaded as 米米 is exactly this race: the row said 妙妙 (the
+        // session list showed her name) while the view model still held null,
+        // so the prompt said "You are 米米" and the diary it wrote went to the
+        // default character's directory.
+        //
+        // Deliberately not gated on `isDraft`: that field is declared far below
+        // and a property initializer cannot see it yet (the T203 note above
+        // documents the same trap). A draft id simply misses in the DB and
+        // leaves the value alone, which is the correct no-op.
+        viewModelScope.launch(Dispatchers.IO) {
+            val rowPersona = runCatching { chatRepository.getSession(sessionId)?.personaId }
+                .getOrNull()
+                ?.takeIf { it.isNotEmpty() }
+            if (rowPersona != null && rowPersona != _personaId.value) {
+                AppLogger.info(TAG, "persona adopted at init: $rowPersona (session=$sessionId)")
+                _personaId.value = rowPersona
+            }
+        }
         loadSession()
         // [T-android-context-usage-hint] Loop-END path for the usage line.
         //
