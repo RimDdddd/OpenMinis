@@ -104,6 +104,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Surface
+import com.openminis.app.data.db.PersonaEntity
 import com.openminis.app.ui.components.MinisAlertDialog
 import com.openminis.app.ui.components.MinisOutlinedButton
 import com.openminis.app.ui.components.MinisMenu
@@ -147,6 +148,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import com.openminis.app.MinisApp
 import com.openminis.app.agent.jobs.AgentJobRegistry
 import com.openminis.app.service.SessionActivityTracker
 import androidx.compose.runtime.setValue
@@ -186,7 +188,9 @@ import com.openminis.app.data.repository.ProviderRepository
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Calendar
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -594,6 +598,12 @@ fun SessionListScreen(
     // doesn't flash the "add a provider" onboarding before the real config emits.
     val configLoaded by providerRepository.configLoaded.collectAsState()
     val scope = rememberCoroutineScope()
+
+    // [T-persona-phase1] "New chat as …" picker. Only shown when at least one
+    // additional character exists — with none, the FAB keeps its one-tap
+    // behaviour and never asks a question the user cannot answer.
+    var showPersonaPicker by remember { mutableStateOf(false) }
+    var personaPickerList by remember { mutableStateOf<List<PersonaEntity>>(emptyList()) }
     val isDark = ChatColors.isDark
 
     // [T-android-search-focus-sticky] When the user opens search but types
@@ -1350,8 +1360,19 @@ fun SessionListScreen(
                     hasSessions = sessions.isNotEmpty() || isSearchActive,
                     onNewChat = {
                         scope.launch {
-                            val sessionId = viewModel.createNewSession()
-                            if (sessionId != null) onNewChatGuarded(sessionId)
+                            val others = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    (context.applicationContext as MinisApp)
+                                        .database.personaDao().getAll()
+                                }.getOrDefault(emptyList())
+                            }
+                            if (others.isEmpty()) {
+                                val sessionId = viewModel.createNewSession()
+                                if (sessionId != null) onNewChatGuarded(sessionId)
+                            } else {
+                                personaPickerList = others
+                                showPersonaPicker = true
+                            }
                         }
                     },
                     onNewChatWithGroup = { groupId ->
@@ -1378,6 +1399,36 @@ fun SessionListScreen(
                 )
             }
         }
+    }
+
+    // [T-persona-phase1] "New chat as …" — the default character is always
+    // offered, because a session with persona_id = NULL is exactly that.
+    if (showPersonaPicker) {
+        val startAs: (String?) -> Unit = { pid ->
+            showPersonaPicker = false
+            scope.launch {
+                val sessionId = viewModel.createNewSession(personaId = pid)
+                if (sessionId != null) onNewChatGuarded(sessionId)
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { showPersonaPicker = false },
+            title = { Text("以谁的身份开始") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    MinisTextButton(onClick = { startAs(null) }) { Text("米米（默认）") }
+                    personaPickerList.forEach { p ->
+                        MinisTextButton(onClick = { startAs(p.id) }) {
+                            Text(p.name.ifBlank { "未命名角色" })
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                MinisTextButton(onClick = { showPersonaPicker = false }) { Text("取消") }
+            },
+        )
     }
 
     // Single delete confirmation

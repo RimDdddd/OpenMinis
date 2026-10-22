@@ -375,7 +375,7 @@ class BackupExporter(
     }
 
     /** `GLOBAL.md` / `SOUL.md` / daily notes, copied verbatim into `data/memory/`. */
-    private fun exportMemory(dataDir: File): BackupManifest.CategoryStat {
+    private suspend fun exportMemory(dataDir: File): BackupManifest.CategoryStat {
         val source = File(context.filesDir, "minis-global/memory")
         val dest = File(dataDir, "memory").apply { mkdirs() }
         var entries = 0
@@ -389,7 +389,46 @@ class BackupExporter(
                 bytes += file.length()
             }
         }
-        return BackupManifest.CategoryStat(entries, bytes, encrypted = false)
+
+        // [T-persona-phase1] Characters travel with memory, because a character
+        // IS her SOUL plus her diary — there is no sensible split. Their files
+        // mirror into `data/personas/<id>/…` and the `personas` rows go to
+        // `data/personas.json`; without the rows a restore would bring the
+        // files back as orphans that no session can address.
+        //
+        // Deliberately inside MEMORY rather than a new category: a new wire key
+        // is a format change that an older build (and iOS) cannot decode, and
+        // "my characters" belongs to the same checkbox a user already ticks for
+        // "my memories".
+        val personasRoot = File(context.filesDir, "minis-global/personas")
+        var personaFiles = 0
+        if (personasRoot.isDirectory) {
+            for (file in personasRoot.walkTopDown().filter { it.isFile }) {
+                val rel = file.relativeTo(personasRoot).path.replace(File.separatorChar, '/')
+                val out = File(File(dataDir, "personas"), rel).apply { parentFile?.mkdirs() }
+                file.copyTo(out, overwrite = true)
+                personaFiles += 1
+                bytes += file.length()
+            }
+        }
+        val rows = runCatching {
+            (context.applicationContext as? com.openminis.app.MinisApp)
+                ?.database?.personaDao()?.getAll()
+        }.getOrNull().orEmpty()
+        if (rows.isNotEmpty() || personaFiles > 0) {
+            val arr = org.json.JSONArray()
+            rows.forEach { p ->
+                arr.put(org.json.JSONObject().apply {
+                    put("id", p.id)
+                    put("name", p.name)
+                    put("icon", p.icon ?: "")
+                    put("created_at", p.createdAt)
+                    put("sort_order", p.sortOrder)
+                })
+            }
+            File(dataDir, "personas.json").writeText(arr.toString())
+        }
+        return BackupManifest.CategoryStat(entries + personaFiles, bytes, encrypted = false)
     }
 
     /**

@@ -661,7 +661,7 @@ class BackupImporter(
         return report
     }
 
-    private fun importMemory(root: File): CategoryReport {
+    private suspend fun importMemory(root: File): CategoryReport {
         val report = CategoryReport(BackupCategory.MEMORY.key)
         val src = File(root, "data/memory")
         if (!src.isDirectory) return report
@@ -682,6 +682,62 @@ class BackupImporter(
             file.copyTo(out, overwrite = true)
             report.filesWritten += 1
             report.bytesWritten += file.length()
+        }
+
+        // [T-persona-phase1] Characters ride along with memory — see the export
+        // side. Rows first, so the directory a row names already exists by the
+        // time anything lists personas; a row whose directory is missing is
+        // still valid (SoulStore.ensureExists re-seeds an empty SOUL).
+        val personasRoot = File(context.filesDir, "minis-global/personas").apply { mkdirs() }
+        val personasSrc = File(root, "data/personas")
+        if (personasSrc.isDirectory) {
+            val personasRootCanonical = personasRoot.canonicalFile
+            for (file in personasSrc.walkTopDown().filter { it.isFile }) {
+                val rel = file.relativeTo(personasSrc).path.replace(File.separatorChar, '/')
+                val out = File(personasRoot, rel)
+                val parent = out.parentFile?.let { it.mkdirs(); it.canonicalFile }
+                if (parent == null || !(parent.path == personasRootCanonical.path ||
+                        parent.path.startsWith(personasRootCanonical.path + File.separator))
+                ) {
+                    report.rejectedPaths += 1
+                    continue
+                }
+                file.copyTo(out, overwrite = true)
+                report.filesWritten += 1
+                report.bytesWritten += file.length()
+            }
+        }
+        val personasIndex = File(root, "data/personas.json")
+        if (personasIndex.isFile) {
+            runCatching {
+                val arr = org.json.JSONArray(personasIndex.readText())
+                val dao = db.personaDao()
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id", "").takeIf { it.isNotEmpty() } ?: continue
+                    val existing = dao.getById(id)
+                    val name = o.optString("name", "").ifEmpty { existing?.name ?: "未命名角色" }
+                    dao.upsert(
+                        com.openminis.app.data.db.PersonaEntity(
+                            id = id,
+                            name = name,
+                            icon = o.optString("icon", "").ifEmpty { null },
+                            createdAt = o.optLong("created_at", existing?.createdAt ?: System.currentTimeMillis()),
+                            sortOrder = o.optInt("sort_order", existing?.sortOrder ?: 0),
+                        ),
+                    )
+                    report.imported += 1
+                }
+                // Metadata caches were seeded from whatever existed before this
+                // restore; re-read so a reopened chat shows the restored name.
+                dao.getAll().forEach { p ->
+                    com.openminis.app.agent.SoulStore.refreshCache(context, p.id)
+                    com.openminis.app.agent.SoulStore.ensureExists(context, p.id)
+                }
+                com.openminis.app.agent.SoulStore.refreshCache(context)
+            }.onFailure {
+                com.openminis.app.logging.AppLogger.warning("BackupImporter", "persona restore failed: ${it.message}")
+            }
         }
         return report
     }

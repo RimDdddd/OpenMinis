@@ -113,12 +113,41 @@ class ChatViewModel(
      * built-in default character (米米), which is what every session created
      * before personas is, so their behaviour is byte-identical.
      *
-     * Bound at construction time on purpose: a session's persona is chosen when
-     * it is created and is immutable in phase one, so the view model never has
-     * to hit the database on the UI thread to answer "whose prompt is this?".
+     * For a DRAFT session the caller knows it up front; for a persisted one the
+     * value is adopted from the row in [loadSession]. Kept as the initial value
+     * of [_personaId] and never read directly afterwards.
      */
-    val personaId: String? = null,
+    initialPersonaId: String? = null,
 ) : ViewModel() {
+
+    /**
+     * [T-persona-phase1] The character this session currently speaks as.
+     *
+     * Mutable rather than a constructor constant: a persisted session carries
+     * its persona in the `sessions` row, and the view model is built before
+     * that row is read. Single-persona behaviour never changes it, so the
+     * default character's prompt is byte-identical to before.
+     */
+    /**
+     * [T-persona-phase1] Character encoded in a DRAFT session id by the
+     * session list's "new chat as …" picker (`__new__<uuid>__psn__<id>`).
+     * Substring-before the other routing markers, same convention as
+     * [initialGroupId] / [initialFolderId]; a plain id yields "" which is the
+     * default character.
+     */
+    private val draftPersonaId: String? =
+        sessionId.substringAfter("__psn__", "").takeIf { it.isNotEmpty() }
+
+    private val _personaId = MutableStateFlow(initialPersonaId ?: draftPersonaId)
+
+    /** Read-only view for prompt building and the memory tools. */
+    val personaId: String? get() = _personaId.value
+
+    /**
+     * [T-persona-phase1] Per-character repositories, so a getter that runs on
+     * every memory write does not allocate a new one each time.
+     */
+    private val personaMemoryRepos = java.util.concurrent.ConcurrentHashMap<String, MemoryRepository>()
 
     /**
      * [T-persona-phase1] The memory repository THIS session writes to.
@@ -130,14 +159,18 @@ class ChatViewModel(
      * never read or overwrite each other's diary, while both read the same
      * GLOBAL.
      */
-    val memoryRepository: MemoryRepository? = when {
-        personaId.isNullOrEmpty() -> baseMemoryRepository
-        baseMemoryRepository == null -> null
-        else -> MemoryRepository(
-            memoryDir = java.io.File(context.filesDir, "minis-global/memory"),
-            personaDir = com.openminis.app.agent.SoulStore.personaMemoryDir(context, personaId),
-        )
-    }
+    val memoryRepository: MemoryRepository?
+        get() {
+            val id = _personaId.value
+            if (id.isNullOrEmpty()) return baseMemoryRepository
+            if (baseMemoryRepository == null) return null
+            return personaMemoryRepos.getOrPut(id) {
+                MemoryRepository(
+                    memoryDir = java.io.File(context.filesDir, "minis-global/memory"),
+                    personaDir = com.openminis.app.agent.SoulStore.personaMemoryDir(context, id),
+                )
+            }
+        }
 
     companion object {
         /**
@@ -702,7 +735,7 @@ class ChatViewModel(
                     baseMemoryRepository = memoryRepository,
                     skillRepository = skillRepository,
                     mcpRepository = mcpRepository,
-                    personaId = personaId,
+                    initialPersonaId = personaId,
                 ) as T
             }
         }
@@ -6058,6 +6091,10 @@ class ChatViewModel(
         val session = chatRepository.createSession(
             modelId = modelId,
             memoryEnabled = _memoryEnabled.value,
+            // [T-persona-phase1] A draft bound to a character persists that
+            // binding with the first message; a draft started without one stays
+            // NULL = the default character.
+            personaId = _personaId.value?.takeIf { it.isNotEmpty() },
         )
         realSessionId = session.id
         // [T-android-opencode-session-header] Hand the just-minted real id to
@@ -6261,6 +6298,13 @@ class ChatViewModel(
 
             // Existing session: load from DB
             val session = chatRepository.getSession(sessionId) ?: return@launch
+            // [T-persona-phase1] Adopt the character this session was created
+            // with. The constructor only knows it for a draft; a persisted row
+            // is the authority, and a row that predates personas reads NULL =
+            // the default character, which is already the initial value.
+            if (!session.personaId.isNullOrEmpty() && session.personaId != _personaId.value) {
+                _personaId.value = session.personaId
+            }
             _sessionTitle.value = session.title ?: UNTITLED_SESSION_TITLE
             _sessionCategory.value = session.category
             _memoryEnabled.value = session.memoryEnabled != 0

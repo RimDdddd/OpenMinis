@@ -1086,11 +1086,19 @@ class SessionListViewModel(
      *   (the folder_id row can only be written once the session exists —
      *   iOS defers the same way via pendingFolderDraft).
      */
-    fun createNewSession(groupId: String? = null, folderId: String? = null): String? {
+    fun createNewSession(
+        groupId: String? = null,
+        folderId: String? = null,
+        // [T-persona-phase1] Which character speaks in this new chat. Encoded
+        // in the draft id exactly like groupId / folderId, and read back by
+        // ChatViewModel at construction. Null = the default character.
+        personaId: String? = null,
+    ): String? {
         if (providerRepository.allVisibleEntries().isEmpty()) return null
         var id = "__new__${java.util.UUID.randomUUID()}"
         if (groupId != null) id += "__grp__$groupId"
         if (folderId != null) id += "__fld__$folderId"
+        if (personaId != null) id += "__psn__$personaId"
         return id
     }
 
