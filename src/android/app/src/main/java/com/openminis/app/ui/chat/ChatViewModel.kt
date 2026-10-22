@@ -154,6 +154,27 @@ class ChatViewModel(
     val personaIdFlow: kotlinx.coroutines.flow.StateFlow<String?> = _personaId.asStateFlow()
 
     /**
+     * [T-persona-phase1] Adopt [id] as this session's character.
+     *
+     * Called by ChatScreen, which resolves the id from the row (or the draft id)
+     * and therefore KNOWS it, instead of the view model inferring it during some
+     * later coroutine. Idempotent: a repeated call with the same id does nothing.
+     */
+    fun setPersona(id: String?) {
+        if (id.isNullOrEmpty() || id == _personaId.value) return
+        AppLogger.info(TAG, "[persona] setPersona $id sid=${sessionId.take(72)}")
+        _personaId.value = id
+        viewModelScope.launch(Dispatchers.IO) {
+            val personaName = runCatching {
+                (context.applicationContext as? com.openminis.app.MinisApp)
+                    ?.database?.personaDao()?.getById(id)?.name
+            }.getOrNull().orEmpty()
+            com.openminis.app.agent.SoulStore.ensurePersonaFile(context, id, personaName)
+            com.openminis.app.agent.SoulStore.refreshCache(context, id)
+        }
+    }
+
+    /**
      * [T-persona-phase1] Per-character repositories, so a getter that runs on
      * every memory write does not allocate a new one each time.
      */

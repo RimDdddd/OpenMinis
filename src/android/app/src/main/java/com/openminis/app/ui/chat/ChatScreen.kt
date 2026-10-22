@@ -606,6 +606,29 @@ fun ChatScreen(
     // character, so the bubble said 米米 forever even after the right id
     // arrived. Collecting the flow makes the header repaint when it lands.
     val sessionPersonaId by viewModel.personaIdFlow.collectAsState()
+
+    // [T-persona-phase1] The SCREEN resolves the character and hands it to the
+    // view model — the view model no longer infers it.
+    //
+    // Everything before this fought over WHEN the id became known: a draft id
+    // carries it, a persisted row carries it, an in-flight load could overwrite
+    // it, and the header read whatever had been resolved by the first frame.
+    // One reader, one owner: this effect runs once per session, reads the same
+    // two sources the rest of the app uses, and pushes the answer down.
+    LaunchedEffect(sessionId) {
+        val resolved = withContext(Dispatchers.IO) {
+            if (sessionId.startsWith("__new__")) {
+                com.openminis.app.data.PersonaDraftIds.fromDraftId(sessionId)
+            } else {
+                runCatching { chatRepository.getSession(sessionId)?.personaId }.getOrNull()
+            }
+        }
+        com.openminis.app.logging.AppLogger.info(
+            "ChatScreen",
+            "[persona] resolved sid=${sessionId.take(72)} persona=$resolved",
+        )
+        viewModel.setPersona(resolved)
+    }
     // [T-android-usage-capsule-style] Which replies currently show their usage
     // capsule. Empty by default — it is revealed by tapping the reply's tail.
     val revealedUsageIds by viewModel.revealedUsageIds.collectAsState()
