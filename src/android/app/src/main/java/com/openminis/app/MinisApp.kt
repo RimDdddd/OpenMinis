@@ -592,6 +592,18 @@ class MinisApp : Application(), ImageLoaderFactory {
         // synchronous metadata read-path (chat header / system prompt).
         com.openminis.app.agent.SoulStore.ensureExists(this)
         com.openminis.app.agent.SoulStore.refreshCache(this)
+        // [T-persona-phase1] Warm every ADDITIONAL character's metadata as well,
+        // so a session that speaks as one of them shows her name/icon from the
+        // first frame instead of falling back to "Minis" until the Soul screen
+        // happens to be opened. Cheap: one small file read per character.
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            runCatching {
+                database.personaDao().getAll().forEach { persona ->
+                    com.openminis.app.agent.SoulStore.ensurePersonaFile(this@MinisApp, persona.id, persona.name)
+                    com.openminis.app.agent.SoulStore.refreshCache(this@MinisApp, persona.id)
+                }
+            }
+        }
 
         // T-config: minis-config CLI surface — registry / audit log /
         // master-switch store. Initialized eagerly here so

@@ -422,6 +422,35 @@ lang: "auto"
 
     private val soulFileCache = java.util.concurrent.ConcurrentHashMap<String, CachedSoul>()
 
+    /**
+     * [T-persona-phase1] Create a character's SOUL.md if it is missing, using
+     * HER name.
+     *
+     * [ensureExists] is the wrong tool here: it writes [DEFAULT_CONTENT], whose
+     * frontmatter is `name: "Minis"` — seeding a second character with it would
+     * make her prompt say she is "Minis". (That is exactly the state a character
+     * created before this code shipped can be in.)
+     */
+    fun ensurePersonaFile(context: Context, personaId: String?, name: String) {
+        if (personaId.isNullOrEmpty()) return
+        val file = fileLocation(context, personaId)
+        if (file.exists()) return
+        save(
+            context,
+            SoulFile(
+                SoulMetadata(
+                    name = name.ifBlank { SoulMetadata.DEFAULT.name },
+                    emoji = "",
+                    icon = "",
+                    style = "",
+                    lang = "auto",
+                ),
+                "",
+            ),
+            personaId,
+        )
+    }
+
     fun load(context: Context, personaId: String? = null): SoulFile? {
         val file = fileLocation(context, personaId)
         if (!file.exists()) return null

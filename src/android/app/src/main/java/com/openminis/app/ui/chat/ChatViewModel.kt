@@ -5880,6 +5880,22 @@ class ChatViewModel(
                 AppLogger.info(TAG, "persona adopted at init: $rowPersona (session=$sessionId)")
                 _personaId.value = rowPersona
             }
+            // [T-persona-phase1] Warm this character's metadata cache.
+            //
+            // Without this the header renders SoulMetadata.DEFAULT ("Minis"):
+            // the cache starts at DEFAULT and only SoulStore.save/refreshCache
+            // fill it, and app launch refreshes the DEFAULT character alone. The
+            // prompt was already correct (it reads SOUL.md from disk), which is
+            // what made the symptom so confusing — the chat introduced itself
+            // with the right name while the bubble above said "Minis".
+            if (!rowPersona.isNullOrEmpty()) {
+                val personaName = runCatching {
+                    (context.applicationContext as? com.openminis.app.MinisApp)
+                        ?.database?.personaDao()?.getById(rowPersona)?.name
+                }.getOrNull().orEmpty()
+                com.openminis.app.agent.SoulStore.ensurePersonaFile(context, rowPersona, personaName)
+                com.openminis.app.agent.SoulStore.refreshCache(context, rowPersona)
+            }
         }
         loadSession()
         // [T-android-context-usage-hint] Loop-END path for the usage line.
