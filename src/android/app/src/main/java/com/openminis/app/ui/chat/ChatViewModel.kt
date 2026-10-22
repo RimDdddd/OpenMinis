@@ -5856,6 +5856,13 @@ class ChatViewModel(
     private val recentlyFailedEntryIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     init {
+        // [T-persona-phase1] One line per view model, so a wrong name in the
+        // header can be traced to the id that produced it instead of guessed at.
+        AppLogger.info(
+            TAG,
+            "[persona] vm init sid=${sessionId.take(72)} draftPersona=$draftPersonaId " +
+                "initial=$initialPersonaId current=${_personaId.value}",
+        )
         // [T-persona-phase1] Adopt this session's character as early as
         // possible, INDEPENDENTLY of loadSession's sequencing.
         //
@@ -15201,6 +15208,7 @@ class ChatViewModel(
         // Pre-T122 the prompt embedded `Current time: yyyy-MM-dd HH:mm` mid-base,
         // which guaranteed cache misses across minute boundaries — even a quick
         // follow-up could land on a different minute and pay full ingestion.
+        AppLogger.info(TAG, "[persona] buildSystemPrompt persona=$personaId sid=${sessionId.take(72)}")
         val today = java.time.LocalDate.now()
         val dateStr = today.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
         // [T-clock-in-prompt] Wall-clock time, so the assistant can answer
