@@ -18,20 +18,27 @@ import java.util.Locale
  */
 class MemoryRepository(
     /**
-     * The SHARED memory root (`minis-global/memory/`) — GLOBAL.md lives here and
-     * is read by every character. Its own daily logs belong to the default
-     * character; another character never writes here.
+     * [T-persona-isolation] The SHARED root (`minis-global/`) — GLOBAL.md lives
+     * directly here and is read by every character. It is deliberately NOT
+     * inside any character's directory: it belongs to the house, not to one of
+     * its residents.
+     *
+     * (Before the isolation change this was `minis-global/memory/`, i.e. GLOBAL
+     * shared a folder with the default character's private diary.)
      */
     private val memoryDir: File,
     /**
-     * [T-persona-phase1] The directory holding THIS character's SOUL.md and
-     * daily logs. Defaults to [memoryDir], i.e. the historical single-character
-     * behaviour, so every existing `MemoryRepository(dir)` call site is
-     * unchanged. A second character gets
-     * `minis-global/personas/<id>/memory/` (see `SoulStore.personaMemoryDir`).
+     * [T-persona-isolation] THIS character's own directory
+     * (`minis-global/personas/<id>/`), holding SOUL.md and LONGTERM.md. The
+     * diary lives one level down in [journalDir].
+     *
+     * Defaults to [memoryDir] only so a bare `MemoryRepository(dir)` still
+     * compiles; every real call site passes both.
      */
     private val personaDir: File = memoryDir,
 ) {
+    /** [T-persona-isolation] This character's diary: `<personaDir>/memory`. */
+    private val journalDir: File = File(personaDir, "memory")
 
     companion object {
         private const val TAG = "MemoryRepository"
@@ -88,6 +95,7 @@ class MemoryRepository(
     init {
         memoryDir.mkdirs()
         if (personaDir != memoryDir) personaDir.mkdirs()
+        journalDir.mkdirs()
     }
 
     // -- memory_write --
@@ -102,7 +110,7 @@ class MemoryRepository(
 
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val fileName = "${dateFmt.format(Date())}.md"
-        val file = File(personaDir, fileName)
+        val file = File(journalDir, fileName)
 
         val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
         val timestamp = timeFmt.format(Date())
@@ -210,7 +218,7 @@ class MemoryRepository(
         }
 
         // Daily logs sorted descending
-        val dailyFiles = personaDir.listFiles()
+        val dailyFiles = journalDir.listFiles()
             ?.filter { it.extension == "md" && it.name != GLOBAL_FILE }
             ?.sortedByDescending { it.name }
             ?: emptyList()
@@ -387,7 +395,7 @@ class MemoryRepository(
         while (fragments.size < MAX_RECENT_FILES && dayOffset < MAX_LOOKBACK_DAYS) {
             val date = Date(now.time - dayOffset.toLong() * 86400_000L)
             val dateStr = dateFmt.format(date)
-            val file = File(personaDir, "$dateStr.md")
+            val file = File(journalDir, "$dateStr.md")
 
             if (file.exists()) {
                 val content = try { file.readText() } catch (_: Exception) { "" }
@@ -469,8 +477,25 @@ class MemoryRepository(
             preview = firstContentLine(globalContent),
         ))
 
+        // [T-persona-isolation] The character's own files, which now sit on the
+        // character root rather than beside the diary.
+        listOf("SOUL.md", LONGTERM_FILE).forEach { name ->
+            val f = File(personaDir, name)
+            if (!f.exists()) return@forEach
+            val content = try { f.readText() } catch (_: Exception) { "" }
+            items.add(
+                MemoryFileInfo(
+                    name = name,
+                    isGlobal = false,
+                    modifiedDate = dateFmt.format(Date(f.lastModified())),
+                    fileSize = formatFileSize(f.length()),
+                    preview = firstContentLine(content),
+                ),
+            )
+        }
+
         // Daily logs sorted descending
-        val dailyFiles = personaDir.listFiles()
+        val dailyFiles = journalDir.listFiles()
             ?.filter { it.extension == "md" && it.name != GLOBAL_FILE }
             ?.sortedByDescending { it.name }
             ?: emptyList()
@@ -499,17 +524,29 @@ class MemoryRepository(
     }
 
     fun readFile(name: String): String {
-        val file = File(personaDir, name)
+        val file = resolveByName(name)
         return if (file.exists()) try { file.readText() } catch (_: Exception) { "" } else ""
     }
 
+    /**
+     * [T-persona-isolation] Which file a Settings-screen name refers to.
+     * SOUL.md / LONGTERM.md sit on the character root, daily logs in `memory/`,
+     * GLOBAL.md on the shared root.
+     */
+    private fun resolveByName(name: String): File = when (name) {
+        GLOBAL_FILE -> File(memoryDir, name)
+        LONGTERM_FILE -> File(personaDir, name)
+        "SOUL.md", com.openminis.app.agent.SoulIcon.SIDECAR_NAME -> File(personaDir, name)
+        else -> File(journalDir, name)
+    }
+
     fun saveFile(name: String, content: String) {
-        File(personaDir, name).writeText(content)
+        resolveByName(name).apply { parentFile?.mkdirs() }.writeText(content)
     }
 
     fun deleteFile(name: String): Boolean {
         if (name == GLOBAL_FILE) return false // Cannot delete GLOBAL.md
-        return File(personaDir, name).delete()
+        return resolveByName(name).delete()
     }
 
     // -- Entry-level operations (used by Session Memory revoke/edit) --
@@ -550,7 +587,7 @@ class MemoryRepository(
         val markerRegex = Regex("""<!-- \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} -->\n""")
 
         for (dateStr in candidates) {
-            val file = File(personaDir, "$dateStr.md")
+            val file = File(journalDir, "$dateStr.md")
             if (!file.exists()) continue
             val content = try { file.readText() } catch (_: Exception) { continue }
 
@@ -589,7 +626,7 @@ class MemoryRepository(
         val markerRegex = Regex("""<!-- \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} -->\n""")
 
         for (dateStr in candidates) {
-            val file = File(personaDir, "$dateStr.md")
+            val file = File(journalDir, "$dateStr.md")
             if (!file.exists()) continue
             val content = try { file.readText() } catch (_: Exception) { continue }
 

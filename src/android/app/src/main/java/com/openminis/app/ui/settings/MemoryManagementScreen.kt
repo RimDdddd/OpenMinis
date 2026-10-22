@@ -91,8 +91,8 @@ fun MemoryManagementScreen(
             memoryRepository
         } else {
             app?.memoryRepositoryFor(selectedPersonaId) ?: MemoryRepository(
-                memoryDir = java.io.File(context.filesDir, "minis-global/memory"),
-                personaDir = com.openminis.app.agent.SoulStore.personaMemoryDir(context, selectedPersonaId),
+                memoryDir = java.io.File(context.filesDir, "minis-global"),
+                personaDir = com.openminis.app.agent.SoulStore.personaRoot(context, selectedPersonaId),
             )
         }
     }

@@ -178,8 +178,8 @@ class MinisApp : Application(), ImageLoaderFactory {
         if (personaId.isNullOrEmpty()) return memoryRepository
         return personaMemoryRepositories.getOrPut(personaId) {
             MemoryRepository(
-                memoryDir = java.io.File(filesDir, "minis-global/memory"),
-                personaDir = com.openminis.app.agent.SoulStore.personaMemoryDir(this, personaId),
+                memoryDir = java.io.File(filesDir, "minis-global"),
+                personaDir = com.openminis.app.agent.SoulStore.personaRoot(this, personaId),
             )
         }
     }
@@ -564,7 +564,13 @@ class MinisApp : Application(), ImageLoaderFactory {
             }
         )
         mcpRepository = MCPRepository(this)
-        memoryRepository = MemoryRepository(java.io.File(filesDir, "minis-global/memory"))
+        // [T-persona-isolation] Shared root (holds GLOBAL.md) + this character's
+        // own directory (SOUL.md / LONGTERM.md / memory).
+        com.openminis.app.agent.SoulStore.migrateToPersonaLayout(this)
+        memoryRepository = MemoryRepository(
+            memoryDir = java.io.File(filesDir, "minis-global"),
+            personaDir = com.openminis.app.agent.SoulStore.personaRoot(this, null),
+        )
         webAppShortcutRepository = WebAppShortcutRepository(database.webAppShortcutDao())
 
         // T-android-safemode-lateinit-crash: every repository the UI layer

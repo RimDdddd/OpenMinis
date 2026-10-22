@@ -164,6 +164,11 @@ class ChatViewModel(
         if (id.isNullOrEmpty() || id == _personaId.value) return
         AppLogger.info(TAG, "[persona] setPersona $id sid=${sessionId.take(72)}")
         _personaId.value = id
+        // [T-persona-isolation] Tell the sandbox which character's home to mount
+        // for this session. Both ids are registered: the route id (a draft for a
+        // new chat) and the persisted id once the row exists.
+        com.openminis.app.sandbox.SessionPersonaRegistry.set(sessionId, id)
+        com.openminis.app.sandbox.SessionPersonaRegistry.set(activeSessionId, id)
         viewModelScope.launch(Dispatchers.IO) {
             val personaName = runCatching {
                 (context.applicationContext as? com.openminis.app.MinisApp)
@@ -197,8 +202,8 @@ class ChatViewModel(
             if (baseMemoryRepository == null) return null
             return personaMemoryRepos.getOrPut(id) {
                 MemoryRepository(
-                    memoryDir = java.io.File(context.filesDir, "minis-global/memory"),
-                    personaDir = com.openminis.app.agent.SoulStore.personaMemoryDir(context, id),
+                    memoryDir = java.io.File(context.filesDir, "minis-global"),
+                    personaDir = com.openminis.app.agent.SoulStore.personaRoot(context, id),
                 )
             }
         }
@@ -6176,6 +6181,9 @@ class ChatViewModel(
             personaId = _personaId.value?.takeIf { it.isNotEmpty() },
         )
         realSessionId = session.id
+        // [T-persona-isolation] The persisted id is the one shells are built
+        // with, so the sandbox binding has to follow the rename.
+        com.openminis.app.sandbox.SessionPersonaRegistry.set(realSessionId, _personaId.value)
         // [T-android-opencode-session-header] Hand the just-minted real id to
         // the provider built while this chat was still a draft. Without it the
         // FIRST turn of every new conversation would reach OpenCode Go with no

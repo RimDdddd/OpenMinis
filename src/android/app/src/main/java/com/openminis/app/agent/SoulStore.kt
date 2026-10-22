@@ -223,6 +223,18 @@ object SoulStore {
     private const val PERSONAS_SUBDIR = "minis-global/personas"
 
     /**
+     * [T-persona-isolation] The built-in default character's directory name.
+     *
+     * The default character used to live in `minis-global/memory/` while every
+     * other character lived under `personas/<id>/`. Two layouts meant two code
+     * paths, and the sandbox could only ever bind one of them — so a second
+     * character's shell pointed at the DEFAULT character's SOUL and diary and
+     * she read 米米's life as her own. Every character now lives in the same
+     * shape, including this one.
+     */
+    const val DEFAULT_PERSONA_DIR_NAME = "__default__"
+
+    /**
      * The directory holding one character's SOUL.md, SOUL.icon.png and diary.
      *
      * [personaId] null / blank = the built-in default character, which lives at
@@ -237,15 +249,81 @@ object SoulStore {
      * of the default character, and a sibling directory would put another
      * character's diary into 米米's prompt.
      */
+    /**
+     * [T-persona-isolation] The character's own directory: SOUL.md,
+     * SOUL.icon.png, LONGTERM.md and `memory/` all live here, for EVERY
+     * character including the default one.
+     */
+    fun personaRoot(context: Context, personaId: String?): File =
+        File(
+            File(context.filesDir, PERSONAS_SUBDIR),
+            personaId?.takeIf { it.isNotBlank() } ?: DEFAULT_PERSONA_DIR_NAME,
+        )
+
+    /** The character's diary directory (`<root>/memory`). */
     fun personaMemoryDir(context: Context, personaId: String?): File =
-        if (personaId.isNullOrEmpty()) {
-            File(context.filesDir, MEMORY_SUBDIR)
-        } else {
-            File(File(File(context.filesDir, PERSONAS_SUBDIR), personaId), "memory")
+        File(personaRoot(context, personaId), "memory")
+
+    /**
+     * [T-persona-isolation] Where GLOBAL.md lives now: `minis-global/GLOBAL.md`,
+     * OUTSIDE any character's directory.
+     *
+     * It used to sit in the default character's memory folder, which made it
+     * simultaneously "the shared rules" and "part of 米米's private diary" —
+     * and made it invisible to a second character's shell.
+     */
+    fun globalFileLocation(context: Context): File =
+        File(File(context.filesDir, "minis-global"), "GLOBAL.md")
+
+    /**
+     * [T-persona-isolation] One-time move from the old two-layout world.
+     *
+     * Before this, the default character lived in `minis-global/memory/`
+     * (SOUL.md, LONGTERM.md and every daily log in one folder, GLOBAL.md mixed
+     * in with them) while other characters lived under `personas/<id>/`. Now
+     * everyone has the same shape, so the old folder has to be unpacked into
+     * `personas/__default__/` and `minis-global/GLOBAL.md`.
+     *
+     * Idempotent: it does nothing when the legacy folder is already gone, and
+     * it never overwrites a file that already exists at the destination (so a
+     * half-finished migration cannot lose data).
+     */
+    fun migrateToPersonaLayout(context: Context) {
+        val globalRoot = File(context.filesDir, "minis-global")
+        val legacy = File(globalRoot, "memory")
+        if (!legacy.isDirectory) return
+        val defaultRoot = personaRoot(context, null)
+        val defaultDiary = File(defaultRoot, "memory").apply { mkdirs() }
+        var moved = 0
+
+        fun move(src: File, dst: File) {
+            if (!src.isFile) return
+            runCatching {
+                if (!dst.exists()) src.copyTo(dst, overwrite = true)
+                if (src.delete()) moved += 1
+            }
         }
 
+        // GLOBAL.md belongs to the house now, not to the default character.
+        move(File(legacy, "GLOBAL.md"), globalFileLocation(context))
+        // The default character's identity files.
+        listOf(FILE_NAME, SoulIcon.SIDECAR_NAME, "LONGTERM.md").forEach {
+            move(File(legacy, it), File(defaultRoot, it))
+        }
+        // ...and everything else in there was her diary.
+        legacy.listFiles()?.forEach { f ->
+            if (f.isFile && f.extension == "md") move(f, File(defaultDiary, f.name))
+        }
+        runCatching { if (legacy.listFiles()?.isEmpty() == true) legacy.delete() }
+        if (moved > 0) {
+            AppLogger.info(TAG, "[persona-isolation] migrated $moved file(s) into personas/$DEFAULT_PERSONA_DIR_NAME")
+        }
+        // Any cache built against the old paths is now stale.
+        soulFileCache.clear()
+    }
+
     fun fileLocation(context: Context, personaId: String? = null): File =
-        File(personaMemoryDir(context, personaId), FILE_NAME)
+        File(personaRoot(context, personaId), FILE_NAME)
 
     /**
      * [T-android-soul-icon-sidecar] The PNG holding the avatar's bytes, beside
@@ -270,7 +348,7 @@ object SoulStore {
      *   - Sync: Android has no SOUL sync path at all (SoulV2 is iOS/iCloud).
      */
     fun iconFileLocation(context: Context, personaId: String? = null): File =
-        File(personaMemoryDir(context, personaId), SoulIcon.SIDECAR_NAME)
+        File(personaRoot(context, personaId), SoulIcon.SIDECAR_NAME)
 
     // -- Body length rules (language-aware) ----------------------------
     //

@@ -33,7 +33,9 @@ object SessionMounts {
     val SESSION_SUBDIRS = listOf("attachments", "offloads", "workspace", "browser")
 
     /** Subdirs under `minis-global/`, shared by every session. */
-    val GLOBAL_SUBDIRS = listOf("memory", "skills", "shared", "mcp-servers")
+    // [T-persona-isolation] "memory" is no longer global: each character has
+    // her own, mounted from her directory (see build()).
+    val GLOBAL_SUBDIRS = listOf("skills", "shared", "mcp-servers")
 
     /**
      * Soft ceiling on the bytes the `-b` arguments add to PRoot's argv. The
@@ -65,6 +67,11 @@ object SessionMounts {
         filesDir: File,
         sessionId: String?,
         externalMounts: List<Pair<String, String>> = emptyList(),
+        // [T-persona-isolation] Whose `/var/minis/memory` this is. Null = the
+        // built-in default character. The mount used to point at ONE fixed
+        // folder for every session, which is how a second character ended up
+        // reading the first one's SOUL and diary as her own.
+        personaId: String? = null,
     ): Built {
         val candidates = linkedMapOf<String, File>()
         if (sessionId != null) {
@@ -73,10 +80,29 @@ object SessionMounts {
         val globalBase = File(filesDir, "minis-global")
         for (sub in GLOBAL_SUBDIRS) candidates["/var/minis/$sub"] = File(globalBase, sub)
 
+        // The character's own world: diary folder plus her identity files, and
+        // the shared GLOBAL.md alongside them so every existing path
+        // (`/var/minis/memory/SOUL.md`, `/var/minis/memory/2026-10-22.md`,
+        // `/var/minis/memory/GLOBAL.md`) keeps resolving.
+        val characterRoot = SessionPersonaRegistry.personaRoot(filesDir, personaId)
+        candidates["/var/minis/memory"] = File(characterRoot, "memory")
+        val personaFiles = mapOf(
+            "/var/minis/memory/SOUL.md" to File(characterRoot, "SOUL.md"),
+            "/var/minis/memory/SOUL.icon.png" to File(characterRoot, "SOUL.icon.png"),
+            "/var/minis/memory/LONGTERM.md" to File(characterRoot, "LONGTERM.md"),
+            "/var/minis/memory/GLOBAL.md" to File(globalBase, "GLOBAL.md"),
+        )
+
         val mounts = linkedMapOf<String, String>()
         val skipped = mutableListOf<String>()
         for ((linux, dir) in candidates) {
             if (ensureDir(dir)) mounts[linux] = dir.absolutePath else skipped += linux
+        }
+        // Files are bound only when they exist — PRoot cannot create a mount
+        // point for a missing file, and a character that has no LONGTERM.md yet
+        // must not cost a mount.
+        for ((linux, file) in personaFiles) {
+            if (file.isFile) mounts[linux] = file.absolutePath
         }
         // External (SAF-picked) folders are the user's, not ours to create,
         // and are passed through as before: under scoped storage a Java
@@ -98,7 +124,12 @@ object SessionMounts {
 
     /** [build] with the app's files dir and the current external mounts. */
     fun forContext(context: Context, sessionId: String?): Built =
-        build(context.filesDir, sessionId, externalMountsSnapshot())
+        build(
+            context.filesDir,
+            sessionId,
+            externalMountsSnapshot(),
+            personaId = SessionPersonaRegistry.get(sessionId),
+        )
 
     /** `-b host:linux` pairs for [mounts], with a soft size warning. */
     fun toProotArgs(mounts: Map<String, String>): List<String> {
