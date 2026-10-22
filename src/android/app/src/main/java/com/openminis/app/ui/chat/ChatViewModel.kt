@@ -13290,6 +13290,7 @@ class ChatViewModel(
                     toolDisabledResult("browser_use")
                 }
             "memory_write" -> executeMemoryWriteTool(argsJson)
+            "move_room" -> executeMoveRoomTool(argsJson)
             // [T-sub-agents-v1] One tool, five actions. The legacy names are
             // accepted so a replayed call from a transcript written before the
             // rename still dispatches instead of hitting "Unknown tool".
@@ -14665,6 +14666,36 @@ class ChatViewModel(
         return out.toByteArray()
     }
 
+    /**
+     * [T-rooms] Write this character's position into `rooms.json`.
+     *
+     * Deliberately does NOT touch the conversation: a move is a state change,
+     * so it shows up in the next request's Runtime context (and on the map)
+     * rather than as a chat bubble. The reply the model gets back names who is
+     * where afterwards, which is what lets it react naturally ("浴室有人") in
+     * the same turn instead of guessing.
+     */
+    private fun executeMoveRoomTool(argsJson: String): ToolExecutionResult {
+        val room = runCatching { JSONObject(argsJson).optString("room", "").trim() }.getOrDefault("")
+        if (room.isEmpty()) {
+            return ToolExecutionResult("Error: 'room' is required.", false, toolTitle = "Move room")
+        }
+        val key = com.openminis.app.rooms.RoomLocationStore.keyOf(_personaId.value)
+        val snap = com.openminis.app.rooms.RoomLocationStore.moveTo(context, key, room)
+        val here = snap.positions.keys
+            .filter { it != key }
+            .joinToString(", ") { k ->
+                val who = if (k == com.openminis.app.rooms.RoomLocationStore.USER_KEY) "川"
+                else com.openminis.app.agent.SoulStore.cachedMetadataFor(k).value.name
+                "$who: ${snap.roomOf(k)}"
+            }
+        val body = buildString {
+            append("Moved to ").append(room).append(".")
+            if (here.isNotEmpty()) append(" Now — ").append(here).append(".")
+        }
+        return ToolExecutionResult(body, true, toolTitle = "Move to $room")
+    }
+
     private fun executeMemoryWriteTool(argsJson: String): ToolExecutionResult {
         val repo = memoryRepository ?: return ToolExecutionResult("Error: Memory not available", false)
         if (!_memoryEnabled.value) {
@@ -15537,6 +15568,31 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
             append("When you tell the user the time, keep the 24-hour form or name the half of the day (下午三点十一); a bare '三点十一' is ambiguous.\n")
             append("- Device language: ").append(lang).append("\n")
             append("- minis-model-use models available: ").append(modelUseCount)
+            // [T-rooms] Positions sit with the clock in the tail: state, not an
+            // event, and changing them must not invalidate the cacheable head.
+            // Two lines — the room list (so a room she has never been in can
+            // still be named) and who is standing where.
+            runCatching {
+                val roomSnap = com.openminis.app.rooms.RoomLocationStore.snapshot(context)
+                val myKey = com.openminis.app.rooms.RoomLocationStore.keyOf(personaId)
+                val myRoom = roomSnap.roomOf(myKey)
+                val others = roomSnap.positions.keys
+                    .filter { it != myKey }
+                    .sorted()
+                    .joinToString(" ") { k ->
+                        val who = if (k == com.openminis.app.rooms.RoomLocationStore.USER_KEY) {
+                            "川 (the user)"
+                        } else {
+                            com.openminis.app.agent.SoulStore.cachedMetadataFor(k).value.name
+                        }
+                        "$who is in ${roomSnap.roomOf(k)}."
+                    }
+                append("\n")
+                append("- Rooms: ").append(roomSnap.rooms.joinToString(" / ")).append("\n")
+                append("- You are in ").append(myRoom).append(".")
+                if (others.isNotEmpty()) append(" ").append(others)
+                append(" Position is state: move_room only when you actually go somewhere.\n")
+            }
         }
     }
 
@@ -17753,6 +17809,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
         "browser_use" -> "Browse Web"
         "read_image" -> "Read Image"
         "memory_write" -> "Write Memory"
+        "move_room" -> "Move Room"
         "memory_get" -> "Read Memory"
         "web_search" -> "Search Web"
         else -> toolName

@@ -91,6 +91,11 @@ object SessionMounts {
             "/var/minis/memory/SOUL.icon.png" to File(characterRoot, "SOUL.icon.png"),
             "/var/minis/memory/LONGTERM.md" to File(characterRoot, "LONGTERM.md"),
             "/var/minis/memory/GLOBAL.md" to File(globalBase, "GLOBAL.md"),
+            // [T-rooms] The room map, so a character can see who is standing
+            // where from a shell (`cat /var/minis/rooms.json`) instead of
+            // spending a tool call on it. Bound only when the file exists —
+            // before the first move there is no map to show.
+            "/var/minis/rooms.json" to File(globalBase, "rooms.json"),
         )
 
         val mounts = linkedMapOf<String, String>()

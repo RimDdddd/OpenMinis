@@ -922,6 +922,7 @@ fun ChatSplitScaffoldRoute(
                 onOpenTerminal = {
                     navController.safeNavigate(Routes.terminal(sessionId = sessionId))
                 },
+                onOpenRooms = { navController.safeNavigate(Routes.ROOMS) },
                 onOpenTerminalWithCommand = { command ->
                     navController.safeNavigate(
                         Routes.terminal(initCommand = command, sessionId = sessionId),

@@ -1,0 +1,176 @@
+package com.openminis.app.ui.rooms
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.openminis.app.R
+import com.openminis.app.agent.SoulStore
+import com.openminis.app.rooms.RoomLocationStore
+import com.openminis.app.ui.settings.SettingsScaffold
+
+/**
+ * [T-rooms] One grid of rooms; each cell holds the faces of whoever is standing
+ * in it.
+ *
+ * Two kinds of movement write the same json, which is why this screen does not
+ * own any state of its own: the user tapping a cell here, and a character
+ * calling `move_room` from the chat. The screen re-reads
+ * [RoomLocationStore.snapshot] on every tap (and the store re-reads the file
+ * when its mtime changed), so a move made in the chat shows up here without any
+ * listener plumbing.
+ *
+ * Rooms come from the json, never from the mount itself — the app has no
+ * business walking a user-mounted folder to decide what a room is. A room the
+ * sandbox added but the user has never entered still gets a cell, because
+ * `move_room` appends unknown names to the list.
+ */
+@Composable
+fun RoomMapScreen(onBack: () -> Unit = {}) {
+    val context = LocalContext.current
+    var snapshot by remember { mutableStateOf(RoomLocationStore.snapshot(context)) }
+    val me = RoomLocationStore.USER_KEY
+    val myRoom = snapshot.roomOf(me)
+
+    SettingsScaffold(
+        title = stringResource(R.string.rooms_title),
+        onBack = onBack,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.rooms_you_are_in, myRoom),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            snapshot.rooms.chunked(2).forEach { pair ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    pair.forEach { room ->
+                        val people = snapshot.positions
+                            .filterValues { it == room }
+                            .keys
+                            .sorted()
+                        Box(Modifier.weight(1f)) {
+                            RoomCell(
+                                room = room,
+                                people = people,
+                                here = room == myRoom,
+                                onClick = { snapshot = RoomLocationStore.moveTo(context, me, room) },
+                            )
+                        }
+                    }
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+            Text(
+                text = stringResource(R.string.rooms_tap_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RoomCell(
+    room: String,
+    people: List<String>,
+    here: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(16.dp)
+    val accent = MaterialTheme.colorScheme.primary
+    val outline = MaterialTheme.colorScheme.outlineVariant
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(112.dp)
+            .clip(shape)
+            .background(
+                if (here) MaterialTheme.colorScheme.surface
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            )
+            .border(
+                width = if (here) 2.dp else 1.dp,
+                color = if (here) accent else outline.copy(alpha = 0.7f),
+                shape = shape,
+            )
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            people.take(4).forEach { key -> FaceChip(key) }
+        }
+        Text(
+            text = room,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = if (here) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
+        )
+    }
+}
+
+@Composable
+private fun FaceChip(key: String) {
+    val name = remember(key) {
+        if (key == RoomLocationStore.USER_KEY) "川"
+        else SoulStore.cachedMetadataFor(key).value.name
+    }
+    val color = when {
+        key == RoomLocationStore.USER_KEY -> Color(0xFF6F8F7C)
+        key == SoulStore.DEFAULT_PERSONA_DIR_NAME -> Color(0xFF3D86D6)
+        else -> Color(0xFFE0925A)
+    }
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(color),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = name.take(1),
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}

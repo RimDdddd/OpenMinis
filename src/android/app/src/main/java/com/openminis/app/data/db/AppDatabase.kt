@@ -15,8 +15,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WebAppShortcutEntity::class,
         FolderEntity::class,
         PersonaEntity::class,
+        SessionPersonaEntity::class,
     ],
-    version = 15,
+    version = 16,
     // [T-android-downgrade-compat] Kept ON so MigrationTestHelper and CI can
     // validate every migration (and its downgrade counterpart) against the
     // committed schema json. Without it the upgrade/downgrade chain has no
@@ -27,6 +28,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
     abstract fun webAppShortcutDao(): WebAppShortcutDao
     abstract fun personaDao(): PersonaDao
+
+    /** [T-persona-phase2] Group-session membership and speaking order. */
+    abstract fun sessionPersonaDao(): SessionPersonaDao
 
     companion object {
         @Volatile
@@ -437,6 +441,46 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * [T-persona-phase2] Group chat membership.
+         *
+         * `session_personas` records who speaks in a group session and in which
+         * order. No existing table is touched: a session with no row here is a
+         * single chat, exactly as before, so every pre-existing conversation
+         * keeps behaving the way it did.
+         *
+         * The composite primary key is (session_id, persona_id) and the column
+         * declarations (types, NOT NULLs, no SQL DEFAULTs) must match
+         * [SessionPersonaEntity] byte for byte — Room aborts on any mismatch.
+         */
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS session_personas (
+                        session_id TEXT NOT NULL,
+                        persona_id TEXT NOT NULL,
+                        sort_order INTEGER NOT NULL,
+                        PRIMARY KEY(session_id, persona_id)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        /**
+         * [T-persona-phase2] Downgrade 16 → 15. NO-OP on purpose, same reasoning
+         * as [MIGRATION_15_14]: an older build does not declare
+         * `session_personas` and Room ignores tables its entities do not ask
+         * for, while dropping the table would throw away the user's group
+         * membership on a downgrade-then-upgrade round trip.
+         */
+        val MIGRATION_16_15 = object : Migration(16, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Intentionally empty. See the doc comment above.
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {            return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
@@ -452,6 +496,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_12, MIGRATION_12_11,
                         MIGRATION_13_14, MIGRATION_14_13,
                         MIGRATION_14_15, MIGRATION_15_14,
+                        MIGRATION_15_16, MIGRATION_16_15,
                     )
                     .build()
                     .also { INSTANCE = it }

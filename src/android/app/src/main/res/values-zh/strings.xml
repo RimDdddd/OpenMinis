@@ -1236,6 +1236,10 @@
     <string name="chat_new_chat_stop_dialog_confirm">停止并新建</string>
     <string name="chat_menu_clear_chat">清空对话</string>
     <string name="chat_menu_open_terminal">打开终端</string>
+    <string name="chat_menu_rooms">房间</string>
+    <string name="rooms_title">房间</string>
+    <string name="rooms_you_are_in">你在 %1$s</string>
+    <string name="rooms_tap_hint">点一间房就走过去。</string>
     <string name="chat_menu_open_browser">打开浏览器</string>
     <string name="chat_menu_browse_chat_files">浏览对话文件</string>
     <string name="chat_menu_enhanced_cache">增强缓存</string>
