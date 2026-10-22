@@ -15157,6 +15157,22 @@ class ChatViewModel(
         // follow-up could land on a different minute and pay full ingestion.
         val today = java.time.LocalDate.now()
         val dateStr = today.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
+        // [T-clock-in-prompt] Wall-clock time, so the assistant can answer
+        // "现在几点" without a tool round trip.
+        //
+        // Deliberately the LAST line of the Runtime context block, which is
+        // itself the tail of the prompt: the pre-T122 form put
+        // `Current time: yyyy-MM-dd HH:mm` into the middle of `base`, and a
+        // prefix-caching provider (DeepSeek/OpenAI) then missed the cache from
+        // that line onward — the whole conversation behind it — every time the
+        // minute ticked. At the tail the invalidation starts after the last
+        // static byte, so what is re-ingested is this line and the turn that
+        // follows, which is what a cached request would have paid for anyway.
+        //
+        // Minute precision on purpose: seconds would change on literally every
+        // request and buy nothing — "now" only needs to be right to a minute.
+        val timeStr = java.time.LocalTime.now()
+            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
         val tzId = java.util.TimeZone.getDefault().id
         val lang = context.resources.configuration.locales[0].toLanguageTag()
 
@@ -15414,6 +15430,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
             // (date → tz → lang → model count) — any reorder defeats the cache.
             append("\n\nRuntime context:\n")
             append("- Current date: ").append(dateStr).append(" (").append(tzId).append(")\n")
+            append("- Current time: ").append(timeStr).append(" (").append(tzId).append(") — local wall clock at the moment this request was built; it changes between requests, so use it for 'now' questions and never assume it is still current later in the conversation.\n")
             append("- Device language: ").append(lang).append("\n")
             append("- minis-model-use models available: ").append(modelUseCount)
         }
@@ -15554,7 +15571,25 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
      * NOT inlined into the LLM payload (parity with iOS processAttachments,
      * AIChatViewModel.swift L1552-1645).
      */
-    private fun prepareUserAttachments(
+    /**
+     * [T-perf-attachments-offmain] Read, downscale, re-encode and persist the
+     * user's attachments OFF the main thread.
+     *
+     * The body is the original implementation, unchanged apart from its name:
+     * it decodes a full camera image (3–10 MB file, tens of MB as a Bitmap),
+     * scales it, re-encodes as JPEG and writes the bytes to disk. That ran
+     * inside `viewModelScope.launch` (Dispatchers.Main.immediate), so a
+     * three-photo send froze the thread that was simultaneously animating the
+     * composer collapsing and the bubble appearing.
+     */
+    private suspend fun prepareUserAttachments(
+        attachments: List<InputAttachment>,
+        sessionId: String,
+    ): PreparedAttachments = withContext(Dispatchers.IO) {
+        prepareUserAttachmentsBlocking(attachments, sessionId)
+    }
+
+    private fun prepareUserAttachmentsBlocking(
         attachments: List<InputAttachment>,
         sessionId: String,
     ): PreparedAttachments {
@@ -15875,7 +15910,11 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
      * Returns null when [text] contains no live marker, letting every caller
      * keep its existing straight-line path untouched.
      */
-    private fun buildPastedParts(text: String, sessionId: String): PastedParts? {
+    /** [T-perf-attachments-offmain] Off-main twin of [buildPastedParts] — see [prepareUserAttachments]. */
+    private suspend fun buildPastedParts(text: String, sessionId: String): PastedParts? =
+        withContext(Dispatchers.IO) { buildPastedPartsBlocking(text, sessionId) }
+
+    private fun buildPastedPartsBlocking(text: String, sessionId: String): PastedParts? {
         val (chunks, consumed) = splitPastePlaceholders(text, _pastedTexts.value)
         if (consumed.isEmpty()) return null
         val byId = _pastedTexts.value.associateBy { it.id }

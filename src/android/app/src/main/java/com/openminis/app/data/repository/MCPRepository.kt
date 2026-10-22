@@ -95,6 +95,10 @@ class MCPRepository(private val context: Context) {
     private val _servers = MutableStateFlow<List<MCPServerConfig>>(emptyList())
     val servers: StateFlow<List<MCPServerConfig>> = _servers.asStateFlow()
 
+    /** [T-perf-prompt-disk-io] Signature of the servers.json last parsed. */
+    @Volatile private var lastLoadedMtime: Long = Long.MIN_VALUE
+    @Volatile private var lastLoadedSize: Long = Long.MIN_VALUE
+
     private val db: SQLiteDatabase by lazy {
         McpDbHelper(context).writableDatabase
     }
@@ -117,8 +121,32 @@ class MCPRepository(private val context: Context) {
         _servers.value = readServersFile()
     }
 
-    /** Alias matching SkillRepository.reloadFromDisk() so callers read symmetrically. */
-    fun reloadFromDisk() = load()
+    /**
+     * Alias matching SkillRepository.reloadFromDisk() so callers read
+     * symmetrically — but ONLY when the file actually changed.
+     *
+     * [T-perf-prompt-disk-io] `buildSystemPrompt()` calls this twice per send,
+     * on the main thread, and the previous body re-read + re-parsed the whole
+     * file every time even though an out-of-band edit (CLI, file browser) is
+     * rare. A stat() is microseconds; the read + JSON parse is not. mtime+size
+     * is the cheap signature; anything that rewrites the file changes at least
+     * one of them.
+     */
+    fun reloadFromDisk() {
+        val file = serversFile
+        if (!file.exists()) {
+            lastLoadedMtime = -1L
+            lastLoadedSize = -1L
+            _servers.value = emptyList()
+            return
+        }
+        val mtime = file.lastModified()
+        val size = file.length()
+        if (mtime == lastLoadedMtime && size == lastLoadedSize) return
+        lastLoadedMtime = mtime
+        lastLoadedSize = size
+        _servers.value = readServersFile()
+    }
 
     private fun readServersFile(): List<MCPServerConfig> {
         val file = serversFile
@@ -311,6 +339,38 @@ class MCPRepository(private val context: Context) {
 
     // -- Session Overrides (mirror SkillRepository) --
 
+    /**
+     * [T-perf-skill-overrides] One query for every override row of [sessionId]
+     * — the MCP twin of `SkillRepository.sessionOverrides`, and used by the
+     * same two hot paths (system-prompt fragment, `/` menu).
+     */
+    fun sessionOverrides(sessionId: String): Map<String, Boolean> {
+        val out = HashMap<String, Boolean>()
+        val cursor = runCatching {
+            db.query(
+                "mcp_session_overrides",
+                arrayOf("mcp_id", "is_enabled"),
+                "session_id = ?",
+                arrayOf(sessionId),
+                null,
+                null,
+                null,
+            )
+        }.getOrNull() ?: return out
+        cursor.use { c ->
+            val idIdx = c.getColumnIndex("mcp_id")
+            val enIdx = c.getColumnIndex("is_enabled")
+            while (c.moveToNext() && idIdx >= 0 && enIdx >= 0) {
+                out[c.getString(idIdx)] = c.getInt(enIdx) == 1
+            }
+        }
+        return out
+    }
+
+    /** [T-perf-skill-overrides] Same answer as [isEnabledForSession], from a prebuilt map. */
+    fun isEnabledFrom(overrides: Map<String, Boolean>, mcpId: String): Boolean =
+        overrides[mcpId] ?: (_servers.value.find { it.id == mcpId }?.enabled ?: false)
+
     fun isEnabledForSession(mcpId: String, sessionId: String): Boolean {
         val cursor = db.rawQuery(
             "SELECT is_enabled FROM mcp_session_overrides WHERE session_id=? AND mcp_id=?",
@@ -440,8 +500,10 @@ class MCPRepository(private val context: Context) {
      * feature design doc §6a.
      */
     fun mcpPromptFragment(sessionId: String): String? {
+        // [T-perf-skill-overrides] One query instead of one per server.
+        val overrides = sessionOverrides(sessionId)
         val enabled = _servers.value
-            .filter { isEnabledForSession(it.id, sessionId) }
+            .filter { isEnabledFrom(overrides, it.id) }
             .sortedByDescending { it.createdAt }
         if (enabled.isEmpty()) return null
 

@@ -294,6 +294,46 @@ class SkillRepository(private val context: Context) {
 
     // -- Session Overrides --
 
+    /**
+     * [T-perf-skill-overrides] Every override row for [sessionId] in ONE query.
+     *
+     * [isEnabledForSession] is fine for a single id (the per-skill toggle), but
+     * the two hot callers — `skillPromptFragment` (twice per send) and the `/`
+     * menu (once per keystroke) — used it inside a `filter`, i.e. one
+     * `rawQuery` + Cursor per installed skill. The prompt builder's own comment
+     * records a user with 490 skills, which is 490 queries on the main thread
+     * at the most input-sensitive moment.
+     *
+     * Reads the SAME precedence as [isEnabledForSession] — override row first,
+     * then the skill's global flag — so the two cannot drift.
+     */
+    fun sessionOverrides(sessionId: String): Map<String, Boolean> {
+        val out = HashMap<String, Boolean>()
+        val cursor = runCatching {
+            db.query(
+                "session_skill_overrides",
+                arrayOf("skill_id", "is_enabled"),
+                "session_id = ?",
+                arrayOf(sessionId),
+                null,
+                null,
+                null,
+            )
+        }.getOrNull() ?: return out
+        cursor.use { c ->
+            val idIdx = c.getColumnIndex("skill_id")
+            val enIdx = c.getColumnIndex("is_enabled")
+            while (c.moveToNext() && idIdx >= 0 && enIdx >= 0) {
+                out[c.getString(idIdx)] = c.getInt(enIdx) == 1
+            }
+        }
+        return out
+    }
+
+    /** [T-perf-skill-overrides] Same answer as [isEnabledForSession], from a prebuilt map. */
+    fun isEnabledFrom(overrides: Map<String, Boolean>, skillId: String): Boolean =
+        overrides[skillId] ?: (_skills.value.find { it.id == skillId }?.isEnabled ?: false)
+
     fun isEnabledForSession(skillId: String, sessionId: String): Boolean {
         val cursor = db.rawQuery(
             "SELECT is_enabled FROM session_skill_overrides WHERE session_id=? AND skill_id=?",
@@ -343,7 +383,10 @@ class SkillRepository(private val context: Context) {
      * Returns null when the session has no enabled skills.
      */
     fun skillPromptFragment(sessionId: String): String? {
-        val enabled = _skills.value.filter { isEnabledForSession(it.id, sessionId) }
+        // [T-perf-skill-overrides] One query for the whole list — see
+        // sessionOverrides. Was one query per skill, twice per send.
+        val overrides = sessionOverrides(sessionId)
+        val enabled = _skills.value.filter { isEnabledFrom(overrides, it.id) }
         if (enabled.isEmpty()) return null
 
         val total = enabled.size

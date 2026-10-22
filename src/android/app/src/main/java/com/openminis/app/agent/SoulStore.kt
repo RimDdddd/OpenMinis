@@ -407,12 +407,39 @@ lang: "auto"
      * missing or unreadable; an empty body parses to default-meta with
      * empty body and callers may treat that as "fall back to default".
      */
+    /**
+     * [T-perf-prompt-disk-io] `load()` is called on the main thread twice per
+     * send (once from `checkContextBeforeSend`, once while building the
+     * prompt), and reading the file is only half the cost: when the avatar
+     * lives in the `SOUL.icon.png` sidecar this also read the PNG and
+     * base64-encoded it — tens of KB of string building, per call.
+     *
+     * The cache is keyed by (mtime, size), so anything that rewrites SOUL.md —
+     * [save], the Settings screen, a shell edit, a backup restore — changes
+     * the signature and the next load re-reads. A `stat` is microseconds.
+     */
+    private class CachedSoul(val mtime: Long, val length: Long, val file: SoulFile)
+
+    private val soulFileCache = java.util.concurrent.ConcurrentHashMap<String, CachedSoul>()
+
     fun load(context: Context, personaId: String? = null): SoulFile? {
         val file = fileLocation(context, personaId)
         if (!file.exists()) return null
+        val cacheKey = personaId ?: ""
+        val mtime = file.lastModified()
+        val length = file.length()
+        soulFileCache[cacheKey]?.let { cached ->
+            if (cached.mtime == mtime && cached.length == length) return cached.file
+        }
         return try {
             val parsed = SoulMDParser.parse(file.readText())
-            parsed.copy(metadata = parsed.metadata.copy(icon = resolveIconForRead(context, parsed.metadata.icon, personaId)))
+            val resolved = parsed.copy(
+                metadata = parsed.metadata.copy(
+                    icon = resolveIconForRead(context, parsed.metadata.icon, personaId),
+                ),
+            )
+            soulFileCache[cacheKey] = CachedSoul(mtime, length, resolved)
+            resolved
         } catch (t: Throwable) {
             AppLogger.warning(TAG, "SOUL.md load failed: ${t.message}")
             null
@@ -465,6 +492,10 @@ lang: "auto"
             tmp.delete()
         }
         cacheFor(personaId).value = file.metadata
+        // [T-perf-prompt-disk-io] Drop the signature cache explicitly: two
+        // writes inside the same millisecond with the same length would
+        // otherwise leave the next load() reading the previous body.
+        soulFileCache.remove(personaId ?: "")
     }
 
     /**

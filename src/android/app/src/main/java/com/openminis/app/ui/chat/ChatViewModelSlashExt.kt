@@ -130,8 +130,15 @@ internal fun ChatViewModel.filteredSlashCommands(): List<SlashCommand> {
         }
     }
     val sid = activeSessionId
-    val skillRows: List<SlashCommand> = skillRepository?.skills?.value
-        ?.filter { skillRepository.isEnabledForSession(it.id, sid) }
+    // [T-perf-skill-overrides] This runs on every keystroke while the `/` menu
+    // is open. Resolve both override tables ONCE for the session instead of
+    // once per skill / per server — that was N+1 queries per character typed.
+    val sr = skillRepository
+    val mr = mcpRepository
+    val skillOverrides = sr?.sessionOverrides(sid).orEmpty()
+    val mcpOverrides = mr?.sessionOverrides(sid).orEmpty()
+    val skillRows: List<SlashCommand> = sr?.skills?.value
+        ?.filter { sr.isEnabledFrom(skillOverrides, it.id) }
         ?.sortedBy { it.name.lowercase() }
         ?.map { skill ->
             val trimmed = skill.description.trim()
@@ -149,8 +156,8 @@ internal fun ChatViewModel.filteredSlashCommands(): List<SlashCommand> {
     // All servers enabled for this session are shown (not just the Top-20
     // disclosed in the system prompt). Tapping fills the composer with the
     // server name; discovery/call happens model-side via minis-mcp-cli.
-    val mcpRows: List<SlashCommand> = mcpRepository?.servers?.value
-        ?.filter { mcpRepository.isEnabledForSession(it.id, sid) }
+    val mcpRows: List<SlashCommand> = mr?.servers?.value
+        ?.filter { mr.isEnabledFrom(mcpOverrides, it.id) }
         ?.sortedBy { it.id.lowercase() }
         ?.map { server ->
             val note = server.note?.trim().orEmpty()
