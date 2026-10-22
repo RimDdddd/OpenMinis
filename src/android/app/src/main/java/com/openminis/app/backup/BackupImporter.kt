@@ -665,6 +665,18 @@ class BackupImporter(
         val report = CategoryReport(BackupCategory.MEMORY.key)
         val src = File(root, "data/memory")
         if (!src.isDirectory) return report
+        // [T-persona-isolation] GLOBAL.md lives outside the character directories
+        // now; restore it first, then the legacy/character tree below if the
+        // package still carries one.
+        File(root, "data/GLOBAL.md").takeIf { it.isFile }?.let { g ->
+            runCatching {
+                val dest = File(context.filesDir, "minis-global/GLOBAL.md")
+                dest.parentFile?.mkdirs()
+                g.copyTo(dest, overwrite = true)
+                report.filesWritten += 1
+                report.bytesWritten += g.length()
+            }
+        }
         val dest = File(context.filesDir, "minis-global/memory").apply { mkdirs() }
         val destRoot = dest.canonicalFile
         for (file in src.walkTopDown().filter { it.isFile }) {

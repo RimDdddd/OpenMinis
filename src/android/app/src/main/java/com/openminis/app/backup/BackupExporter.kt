@@ -374,12 +374,26 @@ class BackupExporter(
         )
     }
 
-    /** `GLOBAL.md` / `SOUL.md` / daily notes, copied verbatim into `data/memory/`. */
+    /**
+     * [T-persona-isolation] The shared `GLOBAL.md` plus every character's own
+     * directory.
+     *
+     * Before isolation this copied one folder (`minis-global/memory`) that held
+     * the default character's SOUL, her diary AND the shared file. The character
+     * directories are copied below; GLOBAL.md, which now lives outside all of
+     * them, is copied here into `data/GLOBAL.md`.
+     */
     private suspend fun exportMemory(dataDir: File): BackupManifest.CategoryStat {
-        val source = File(context.filesDir, "minis-global/memory")
-        val dest = File(dataDir, "memory").apply { mkdirs() }
         var entries = 0
         var bytes = 0L
+        val sharedGlobal = File(context.filesDir, "minis-global/GLOBAL.md")
+        if (sharedGlobal.isFile) {
+            sharedGlobal.copyTo(File(dataDir, "GLOBAL.md").apply { parentFile?.mkdirs() }, overwrite = true)
+            entries += 1
+            bytes += sharedGlobal.length()
+        }
+        val source = File(context.filesDir, "minis-global/memory")
+        val dest = File(dataDir, "memory").apply { mkdirs() }
         if (source.isDirectory) {
             for (file in source.walkTopDown().filter { it.isFile }) {
                 val rel = file.relativeTo(source).path.replace(File.separatorChar, '/')

@@ -651,7 +651,9 @@ fun SoulSettingsScreen(
                                 // default character instead.
                                 app.database.chatDao().detachPersonaFromSessions(targetId)
                                 personaDao.deleteById(targetId)
-                                SoulStore.personaMemoryDir(context, targetId).deleteRecursively()
+                                // [T-persona-isolation] Her whole directory:
+                                // SOUL, LONGTERM, avatar and diary.
+                                SoulStore.personaRoot(context, targetId).deleteRecursively()
                                 SoulStore.refreshCache(context, targetId)
                             }
                             personaReload++

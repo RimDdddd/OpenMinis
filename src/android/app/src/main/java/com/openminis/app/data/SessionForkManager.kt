@@ -190,7 +190,9 @@ class SessionForkManager(
             AppLogger.warning(TAG, "copyMemory: rejecting unsafe fileName '$fileName'")
             return false
         }
-        val dir = File(filesDir, "minis-global/memory").apply { mkdirs() }
+        // [T-persona-isolation] The default character's diary directory.
+        val dir = File(filesDir, "minis-global/personas/${com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME}/memory")
+            .apply { mkdirs() }
         return try {
             File(dir, fileName).writeText(content)
             true
