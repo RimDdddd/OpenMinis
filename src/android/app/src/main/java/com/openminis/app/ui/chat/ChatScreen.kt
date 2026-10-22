@@ -2901,8 +2901,13 @@ fun ChatScreen(
                             // SoulStore.cachedMetadata is the same source the
                             // input placeholder uses (see ~line 3581), so
                             // soul renames in Soul Settings reflect here live.
+                            // [T-persona-phase1] Fall back to THIS session's
+                            // character, not the default one. A chat with no
+                            // generated title showed 米米's name in the top bar
+                            // until the first message produced a title — the
+                            // header was right and the title bar was not.
                             val topBarSoul by com.openminis.app.agent.SoulStore
-                                .cachedMetadata.collectAsState()
+                                .cachedMetadataFor(sessionPersonaId).collectAsState()
                             val displayTitle = when {
                                 showChatTitlePill
                                     && sessionTitle.isNotBlank()
@@ -6712,8 +6717,11 @@ fun ChatScreen(
                                         // source for the Soul-customized name
                                         // so renames in Soul Settings reflect
                                         // here live.
+                                        // [T-persona-phase1] Whose name to put in
+                                        // "Message <name>" — this session's
+                                        // character, not the default one.
                                         val soulName by com.openminis.app.agent.SoulStore
-                                            .cachedMetadata.collectAsState()
+                                            .cachedMetadataFor(sessionPersonaId).collectAsState()
                                         // [T-android-composer-placeholder-rotation]
                                         // Crossfade between hints. Reduce-motion
                                         // (animator scale 0) skips the fade and
