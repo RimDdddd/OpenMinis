@@ -1,7 +1,11 @@
 package com.openminis.app.ui.settings
 
+import com.openminis.app.MinisApp
 import com.openminis.app.R
+import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.ui.components.MinisTextButton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -43,9 +47,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import com.openminis.app.data.repository.MemoryRepository
 import com.openminis.app.ui.components.DialogTextField
 
 /**
@@ -60,11 +64,38 @@ import com.openminis.app.ui.components.DialogTextField
 fun MemoryManagementScreen(
     memoryRepository: MemoryRepository,
     onBack: () -> Unit,
-    onFileClick: (fileName: String, isGlobal: Boolean) -> Unit = { _, _ -> },
+    /** [T-private-longterm] Which character's file, so the editor opens the same diary it listed. */
+    onFileClick: (fileName: String, isGlobal: Boolean, personaId: String?) -> Unit = { _, _, _ -> },
+    /** Character to open on; null = the built-in default character. */
+    initialPersonaId: String? = null,
 ) {
     var files by remember { mutableStateOf<List<MemoryRepository.MemoryFileInfo>>(emptyList()) }
     var deleteFileName by remember { mutableStateOf<String?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    // [T-private-longterm] Each character has her OWN diary directory, so this
+    // page is a per-character view rather than one global list. The switcher is
+    // the whole point: without it a second character's memories were written to
+    // disk and then invisible — no screen anywhere could show them.
+    val app = remember(context) { context.applicationContext as? MinisApp }
+    var personas by remember { mutableStateOf<List<com.openminis.app.data.db.PersonaEntity>>(emptyList()) }
+    var selectedPersonaId by remember(initialPersonaId) { mutableStateOf(initialPersonaId) }
+    LaunchedEffect(Unit) {
+        personas = withContext(Dispatchers.IO) {
+            runCatching { app?.database?.personaDao()?.getAll() }.getOrNull().orEmpty()
+        }
+    }
+    val activeRepository = remember(selectedPersonaId, memoryRepository) {
+        if (selectedPersonaId.isNullOrEmpty()) {
+            memoryRepository
+        } else {
+            app?.memoryRepositoryFor(selectedPersonaId) ?: MemoryRepository(
+                memoryDir = java.io.File(context.filesDir, "minis-global/memory"),
+                personaDir = com.openminis.app.agent.SoulStore.personaMemoryDir(context, selectedPersonaId),
+            )
+        }
+    }
+    val selectedPersonaName = personas.firstOrNull { it.id == selectedPersonaId }?.name
     // [T-memory-global-toggle-settings-ui-android] Global default for
     // newly-created sessions. Stored separately from per-session
     // memoryEnabled (which lives in the sessions DB row) so toggling
@@ -75,11 +106,41 @@ fun MemoryManagementScreen(
         mutableStateOf(com.openminis.app.data.MemoryGlobalPrefs.isGlobalEnabled(context))
     }
 
-    LaunchedEffect(Unit) {
-        files = memoryRepository.listAllFiles()
+    LaunchedEffect(activeRepository) {
+        files = withContext(Dispatchers.IO) { activeRepository.listAllFiles() }
     }
 
-    SettingsScaffold(title = stringResource(R.string.memory_title), onBack = onBack) {
+    SettingsScaffold(
+        title = if (selectedPersonaName.isNullOrBlank()) stringResource(R.string.memory_title)
+                else selectedPersonaName,
+        onBack = onBack,
+    ) {
+        // [T-private-longterm] Whose memory this page is showing. Only rendered
+        // when a second character exists — with one character there is nothing
+        // to switch to and the extra row would just be noise.
+        if (personas.isNotEmpty()) {
+            SettingsSection(header = "记忆属于谁") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    MemoryPersonaChip(
+                        label = stringResource(R.string.memory_title),
+                        selected = selectedPersonaId == null,
+                        onClick = { selectedPersonaId = null },
+                    )
+                    personas.forEach { p ->
+                        MemoryPersonaChip(
+                            label = p.name.ifBlank { "未命名角色" },
+                            selected = p.id == selectedPersonaId,
+                            onClick = { selectedPersonaId = p.id },
+                        )
+                    }
+                }
+            }
+        }
         // Always-visible global toggle — sits above the file list so the
         // user finds it whether or not any memory files exist yet.
         SettingsSection(
@@ -123,7 +184,7 @@ fun MemoryManagementScreen(
                 files.forEachIndexed { index, file ->
                     MemoryFileRow(
                         file = file,
-                        onClick = { onFileClick(file.name, file.isGlobal) },
+                        onClick = { onFileClick(file.name, file.isGlobal, selectedPersonaId) },
                         onDelete = if (!file.isGlobal) { { deleteFileName = file.name } } else null,
                     )
                     if (index < files.size - 1) {
@@ -147,8 +208,8 @@ fun MemoryManagementScreen(
             confirmButton = {
                 MinisTextButton(onClick = {
                     deleteFileName?.let {
-                        memoryRepository.deleteFile(it)
-                        files = memoryRepository.listAllFiles()
+                        activeRepository.deleteFile(it)
+                        files = activeRepository.listAllFiles()
                     }
                     deleteFileName = null
                 }) {
@@ -379,5 +440,29 @@ fun MemoryFileEditScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+}
+
+
+/**
+ * [T-private-longterm] One entry of the "whose memory" switcher. Deliberately a
+ * local composable rather than the Soul screen's PersonaChip: the two pages
+ * want different emphasis (this one is a view selector, that one is an editor
+ * tab strip) and sharing the code would tie them together for no gain.
+ */
+@Composable
+private fun MemoryPersonaChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val bg = if (selected) androidx.compose.material3.MaterialTheme.colorScheme.primary
+             else androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
+    val fg = if (selected) androidx.compose.material3.MaterialTheme.colorScheme.onPrimary
+             else androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+    ) {
+        androidx.compose.material3.Text(text = label, color = fg, fontSize = 14.sp)
     }
 }

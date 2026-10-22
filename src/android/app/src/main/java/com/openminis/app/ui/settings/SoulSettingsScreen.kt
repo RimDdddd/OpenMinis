@@ -95,7 +95,11 @@ import java.util.UUID
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SoulSettingsScreen(onBack: () -> Unit) {
+fun SoulSettingsScreen(
+    onBack: () -> Unit,
+    /** [T-private-longterm] Opens the selected character's own diary. */
+    onOpenMemory: (personaId: String?) -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -305,6 +309,7 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
                 if (isDirty) switchBlocked = true else { switchBlocked = false; showNewPersonaDialog = true }
             },
             onDelete = { showDeletePersonaDialog = true },
+            onOpenMemory = { onOpenMemory(selectedPersonaId) },
         )
 
         SettingsSection(
@@ -676,6 +681,8 @@ private fun PersonaBar(
     onSelect: (String?) -> Unit,
     onCreate: () -> Unit,
     onDelete: () -> Unit,
+    /** [T-private-longterm] Jump to this character's diary. */
+    onOpenMemory: () -> Unit = {},
 ) {
     SettingsSection(header = "角色") {
         Column(modifier = Modifier.padding(vertical = 10.dp)) {
@@ -708,6 +715,12 @@ private fun PersonaBar(
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                 )
+            }
+            // [T-private-longterm] Each character's diary is a separate
+            // directory; this is the obvious place to reach it, because the
+            // user is already looking at "who" rather than "where".
+            MinisTextButton(onClick = onOpenMemory) {
+                Text("她的日记", fontSize = 12.sp)
             }
             if (selectedPersonaId != null) {
                 MinisTextButton(onClick = onDelete) {

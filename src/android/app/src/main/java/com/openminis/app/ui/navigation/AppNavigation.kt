@@ -166,6 +166,14 @@ object Routes {
     const val AGENT_TRANSCRIPT = "agent_transcript/{sessionId}"
     fun agentTranscript(sessionId: String) = "agent_transcript/$sessionId"
     const val MEMORY = "memory"
+    /**
+     * [T-private-longterm] One character's diary, opened directly from the Soul
+     * screen. `__default__` is the built-in character — a sentinel rather than
+     * a nullable route argument, so the path never contains an empty segment.
+     */
+    const val MEMORY_PERSONA = "memory/persona/{personaId}"
+    fun memoryForPersona(personaId: String?) = "memory/persona/${personaId ?: DEFAULT_PERSONA_KEY}"
+    const val DEFAULT_PERSONA_KEY = "__default__"
     /** [T-p2-agent-settings] Settings › Agents. */
     const val AGENTS = "agents"
     // [T-sub-agents-v1] The roster the main model delegates to by name.
@@ -177,7 +185,7 @@ object Routes {
     const val MCP = "mcp"
     /** [T-soul-md] SOUL.md editor. */
     const val SOUL = "soul"
-    const val MEMORY_FILE_EDIT = "memory_file/{fileName}/{isGlobal}"
+    const val MEMORY_FILE_EDIT = "memory_file/{personaId}/{fileName}/{isGlobal}"
     const val PERMISSIONS = "permissions"
     /**
      * T322 / [T-android-privileged-backend]: Shizuku-protocol manager
@@ -213,7 +221,8 @@ object Routes {
 
     fun logDetail(fileName: String) = "log_detail/$fileName"
     fun sessionStorageDetail(sessionId: String) = "session_storage/$sessionId"
-    fun memoryFileEdit(fileName: String, isGlobal: Boolean) = "memory_file/$fileName/$isGlobal"
+    fun memoryFileEdit(personaId: String?, fileName: String, isGlobal: Boolean) =
+        "memory_file/${personaId ?: DEFAULT_PERSONA_KEY}/$fileName/$isGlobal"
     fun chat(sessionId: String) = "chat/$sessionId"
     fun providerDetail(instanceId: String) = "provider/$instanceId"
     fun shadowVoiceDetail(instanceId: String) = "voice_service/$instanceId"
@@ -1341,8 +1350,29 @@ fun AppNavigation(
                 MemoryManagementScreen(
                     memoryRepository = memoryRepository,
                     onBack = { navController.safePopBackStack() },
-                    onFileClick = { fileName, isGlobal ->
-                        navController.safeNavigate(Routes.memoryFileEdit(fileName, isGlobal))
+                    onFileClick = { fileName, isGlobal, personaId ->
+                        navController.safeNavigate(Routes.memoryFileEdit(personaId, fileName, isGlobal))
+                    },
+                )
+            }
+        }
+
+        // [T-private-longterm] One character's diary, opened from the Soul
+        // screen. `__default__` is the built-in character; the screen itself
+        // owns the switcher, so landing here just preselects the right one.
+        composable(
+            route = Routes.MEMORY_PERSONA,
+            arguments = listOf(navArgument("personaId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val routePersona = backStackEntry.arguments?.getString("personaId")
+            val persona = routePersona?.takeIf { it != Routes.DEFAULT_PERSONA_KEY }
+            if (memoryRepository != null) {
+                MemoryManagementScreen(
+                    memoryRepository = memoryRepository,
+                    onBack = { navController.safePopBackStack() },
+                    initialPersonaId = persona,
+                    onFileClick = { fileName, isGlobal, personaId ->
+                        navController.safeNavigate(Routes.memoryFileEdit(personaId, fileName, isGlobal))
                     },
                 )
             }
@@ -1363,23 +1393,38 @@ fun AppNavigation(
         composable(Routes.SOUL) {
             com.openminis.app.ui.settings.SoulSettingsScreen(
                 onBack = { navController.safePopBackStack() },
+                // [T-private-longterm] "Her diary" lives on the character tab
+                // strip, because that is where the user already is when they
+                // think "what has she written down".
+                onOpenMemory = { personaId ->
+                    navController.safeNavigate(Routes.memoryForPersona(personaId))
+                },
             )
         }
 
         composable(
             route = Routes.MEMORY_FILE_EDIT,
             arguments = listOf(
+                navArgument("personaId") { type = NavType.StringType },
                 navArgument("fileName") { type = NavType.StringType },
                 navArgument("isGlobal") { type = NavType.BoolType },
             ),
         ) { backStackEntry ->
             val fileName = backStackEntry.arguments?.getString("fileName") ?: return@composable
             val isGlobal = backStackEntry.arguments?.getBoolean("isGlobal") ?: false
-            if (memoryRepository != null) {
+            val routePersona = backStackEntry.arguments?.getString("personaId")
+            val editPersona = routePersona?.takeIf { it != Routes.DEFAULT_PERSONA_KEY }
+            val app = context.applicationContext as? com.openminis.app.MinisApp
+            // [T-private-longterm] Editing a second character's diary must write
+            // HER file — the route carries the persona, and the repository is
+            // resolved from it, not from the process-wide default instance.
+            val editRepository = if (editPersona == null) memoryRepository
+                                 else app?.memoryRepositoryFor(editPersona)
+            if (editRepository != null) {
                 MemoryFileEditScreen(
                     fileName = fileName,
                     isGlobal = isGlobal,
-                    memoryRepository = memoryRepository,
+                    memoryRepository = editRepository,
                     onBack = { navController.safePopBackStack() },
                 )
             }

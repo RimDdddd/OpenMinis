@@ -157,6 +157,31 @@ class MinisApp : Application(), ImageLoaderFactory {
     lateinit var mcpRepository: MCPRepository
         private set
     lateinit var memoryRepository: MemoryRepository
+
+    /**
+     * [T-private-longterm] Memory repositories for the NON-default characters,
+     * keyed by persona id. The default character keeps the single
+     * [memoryRepository] instance above, so every pre-persona call site is
+     * untouched.
+     *
+     * One instance per character matters: these are file-backed and stateless
+     * apart from the directory they point at, but re-creating one per screen
+     * would re-run `mkdirs()` on each open and lose nothing — this is just the
+     * cheap way to keep "the same character always means the same directory".
+     */
+    private val personaMemoryRepositories =
+        java.util.concurrent.ConcurrentHashMap<String, MemoryRepository>()
+
+    /** The memory repository for [personaId]; null / blank = the default character. */
+    fun memoryRepositoryFor(personaId: String?): MemoryRepository {
+        if (personaId.isNullOrEmpty()) return memoryRepository
+        return personaMemoryRepositories.getOrPut(personaId) {
+            MemoryRepository(
+                memoryDir = java.io.File(filesDir, "minis-global/memory"),
+                personaDir = com.openminis.app.agent.SoulStore.personaMemoryDir(this, personaId),
+            )
+        }
+    }
         private set
     lateinit var webAppShortcutRepository: WebAppShortcutRepository
         private set
