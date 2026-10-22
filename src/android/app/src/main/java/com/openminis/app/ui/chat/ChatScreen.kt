@@ -3588,15 +3588,21 @@ fun ChatScreen(
                 // mount uses `lastToolBlocks.isNotEmpty()` over the merged
                 // view; we mirror that semantically by checking the same
                 // filter on both sources.
-                val streamingById by viewModel.streamingById.collectAsState()
-                val hasFloatingTools = remember(messages, streamingById) {
-                    val merged = if (streamingById.isEmpty()) messages
-                                 else mergeStreamingOverlay(messages, streamingById)
-                    merged.any { msg ->
-                        msg.role == "assistant" && msg.toolBlocks.any { tb ->
-                            tb.toolStatus != null && tb.kind != "thinking" && tb.kind != "info"
+                // [T-perf-row-subscription] Subscribing to `streamingById`
+                // HERE meant (a) a recompose of this whole scope — which owns
+                // the LazyColumn — on every token delta, and (b) a full
+                // `messages.map { copy() }` overlay rebuild per delta just to
+                // answer one boolean. Sampled to 200 ms and answered from the
+                // deltas themselves: the bar's mount condition does not need
+                // per-token precision.
+                var hasFloatingTools by remember(messages) { mutableStateOf(false) }
+                LaunchedEffect(messages) {
+                    viewModel.streamingById
+                        .sample(200)
+                        .collect { stream ->
+                            val next = hasFloatingToolStatus(messages, stream)
+                            if (next != hasFloatingTools) hasFloatingTools = next
                         }
-                    }
                 }
                 val visualOverlayHeight = 65.dp  // thumbnailHeight in FloatingToolStatusBar
                 // Halve the breathing room above the input bar in both
@@ -3679,6 +3685,19 @@ fun ChatScreen(
                 // computation on every new emission.
                 var flatItems by remember(sessionId) {
                     mutableStateOf<List<FlatChatItem>>(emptyList())
+                }
+                // [T-perf-row-subscription] "Which row is newest" changes only
+                // when a row is APPENDED — not on every 80 ms tick. Deriving it
+                // here means each visible row subscribes to a String that is
+                // usually unchanged, instead of reading the whole `flatItems`
+                // list inside composition. The previous form
+                // (`item == flatItems.lastOrNull()` in the item body) gave every
+                // visible row its own subscription to the list state, so a
+                // streaming tick recomposed all of them and threw away the
+                // "frozen rows keep their instance and skip" optimisation one
+                // layer below.
+                val newestItemKey by remember(sessionId) {
+                    derivedStateOf { flatItems.lastOrNull()?.key }
                 }
                 SideEffect { voiceScreenItems.items = flatItems }
                 // [T-android-coldload-offmain-parse] Composition-snapshot
@@ -4301,7 +4320,7 @@ fun ChatScreen(
                         // onPlaced is the moment the user actually sees
                         // content. SideEffect fires on first composition
                         // (before measure); onPlaced fires after layout.
-                        if (item == flatItems.lastOrNull()) {
+                        if (item.key == newestItemKey) {
                             androidx.compose.runtime.SideEffect {
                                 com.openminis.app.diagnostics.PerfLongCtx.step(
                                     sessionId,
@@ -4353,7 +4372,7 @@ fun ChatScreen(
                                 }
                             }
                         }
-                        val isNewestItem = item == flatItems.lastOrNull()
+                        val isNewestItem = item.key == newestItemKey
                         Box(
                             modifier = Modifier
                                 .alpha(rowAlpha)
@@ -7982,3 +8001,24 @@ private fun ThinkingLevelSheet(
 }
 
 
+
+/**
+ * [T-perf-row-subscription] Does any assistant turn currently show a floating
+ * tool status bar worth reserving space for?
+ *
+ * Answers from `messages` plus the streaming DELTAS rather than from a merged
+ * copy of the whole conversation: the caller used to build
+ * `messages.map { it.copy(...) }` for every token just to evaluate this, which
+ * for a 577-message chat is ~577 allocations per delta. The delta map already
+ * holds exactly the rows the merge would have overridden.
+ */
+private fun hasFloatingToolStatus(
+    messages: List<ChatMessage>,
+    streaming: Map<String, StreamingDelta>,
+): Boolean {
+    fun blocksCarryStatus(blocks: List<AssistantBlock>): Boolean =
+        blocks.any { tb -> tb.toolStatus != null && tb.kind != "thinking" && tb.kind != "info" }
+
+    if (messages.any { it.role == "assistant" && blocksCarryStatus(it.toolBlocks) }) return true
+    return streaming.values.any { blocksCarryStatus(it.toolBlocks) }
+}

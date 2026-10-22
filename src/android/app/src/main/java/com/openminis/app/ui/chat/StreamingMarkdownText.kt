@@ -61,6 +61,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -780,12 +781,28 @@ private fun StreamingMarkdownTextBody(
     // suspend-safe and frees the runtime to drop intermediate values when the
     // collector falls behind. When streaming ends, emit the final value
     // unconditionally so we don't render a stale half-block.
-    val displayContent by produceState(initialValue = content, content, isStreaming) {
+    // [T-perf-stream-throttle-fix] `content` must NOT be a produceState key and
+    // must NOT be read directly inside `snapshotFlow`:
+    //
+    //   - as a key, every delta cancelled and restarted the producer;
+    //   - read as a plain parameter, `snapshotFlow { content }` captured one
+    //     value and finished immediately.
+    //
+    // Both together made the `delay(...)` below run AFTER the new value had
+    // already been published, so the adaptive throttle (200/300/500/1000 ms)
+    // never held anything back: the block re-parsed and recomposed once per
+    // 80 ms list tick instead. Reading through `rememberUpdatedState` keeps the
+    // producer alive across deltas, and the `delay` inside `collect` — combined
+    // with `conflate()` — is what actually samples.
+    val latestContent = rememberUpdatedState(content)
+    val displayContent by produceState(initialValue = content, isStreaming) {
         if (!isStreaming) {
-            value = content
+            // Not streaming: follow the value exactly, so a rewrite (theme
+            // switch, edit, reload) lands immediately.
+            snapshotFlow { latestContent.value }.collect { value = it }
             return@produceState
         }
-        snapshotFlow { content }
+        snapshotFlow { latestContent.value }
             .conflate()
             .collect { latest ->
                 value = latest
