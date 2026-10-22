@@ -105,7 +105,10 @@ class ChatViewModel(
     private val chatRepository: ChatRepository,
     private val providerRepository: ProviderRepository,
     internal val context: Context,
-    baseMemoryRepository: MemoryRepository? = null,
+    // `private val` (not a bare parameter) on purpose: [memoryRepository] is a
+    // getter now, and a getter cannot reach a constructor parameter that never
+    // became a property.
+    private val baseMemoryRepository: MemoryRepository? = null,
     val skillRepository: com.openminis.app.data.repository.SkillRepository? = null,
     val mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
     /**
@@ -142,6 +145,13 @@ class ChatViewModel(
 
     /** Read-only view for prompt building and the memory tools. */
     val personaId: String? get() = _personaId.value
+
+    /**
+     * [T-persona-phase1] The same value as a flow, for the chat UI: a session
+     * reload may learn its character from the row after the first frame, and
+     * the assistant header has to repaint when that happens.
+     */
+    val personaIdFlow: kotlinx.coroutines.flow.StateFlow<String?> = _personaId.asStateFlow()
 
     /**
      * [T-persona-phase1] Per-character repositories, so a getter that runs on

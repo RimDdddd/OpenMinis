@@ -278,7 +278,11 @@ import com.openminis.app.ui.components.decorativePhase
 import androidx.compose.ui.draw.drawWithCache
 
 @Composable
-internal fun AssistantHeader() {
+internal fun AssistantHeader(
+    // [T-persona-phase1] Whose header this is. Null = the built-in default
+    // character, which reads the same single cached metadata as before.
+    personaId: String? = null,
+) {
     // [T-soul-md] Identity header = icon + SOUL.md-driven `name`.
     //
     // [T-android-soul-custom-icon] The icon is now the user-settable
@@ -290,7 +294,7 @@ internal fun AssistantHeader() {
     // two surfaces were written separately and the chat one silently failed
     // to pick up image icons; sharing the renderer makes that class of
     // divergence impossible rather than merely unlikely.
-    val soulMeta by com.openminis.app.agent.SoulStore.cachedMetadata.collectAsState()
+    val soulMeta by com.openminis.app.agent.SoulStore.cachedMetadataFor(personaId).collectAsState()
     val displayName = soulMeta.name.ifBlank { com.openminis.app.agent.SoulMetadata.DEFAULT.name }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -432,6 +436,8 @@ private fun formatTokenCount(count: Int): String {
 internal fun AssistantMessageView(
     message: ChatMessage,
     onRetry: (() -> Unit)? = null,
+    // [T-persona-phase1] Whose header to draw; null = the default character.
+    personaId: String? = null,
     // [T-android-usage-capsule-style] Whether this message's usage capsule is
     // currently revealed. Owned by the ViewModel so the flat renderer — which
     // emits the capsule as a separate list item — can share the same state.
@@ -442,7 +448,7 @@ internal fun AssistantMessageView(
             .fillMaxWidth()
             .padding(vertical = 2.dp),
     ) {
-        AssistantHeader()
+        AssistantHeader(personaId)
 
         // Render blocks in original order — text, thinking, and tool calls interleaved
         // exactly as they arrived in the stream (each assistant turn may contain multiple

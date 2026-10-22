@@ -245,8 +245,12 @@ fun SoulSettingsScreen(onBack: () -> Unit) {
                     val id = selectedPersonaId
                     if (id != null) {
                         val row = personaDao.getById(id)
-                        if (row != null && row.name != name.trim()) {
-                            personaDao.upsert(row.copy(name = name.trim()))
+                        // [T-persona-phase1] Icon rides along with the name:
+                        // both are what the session list and the assistant
+                        // header show, and SOUL.md alone is not read by either.
+                        val newIcon = icon.ifEmpty { null }
+                        if (row != null && (row.name != name.trim() || row.icon != newIcon)) {
+                            personaDao.upsert(row.copy(name = name.trim(), icon = newIcon))
                         }
                     }
                 }
