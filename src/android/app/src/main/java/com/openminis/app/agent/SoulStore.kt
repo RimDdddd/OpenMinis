@@ -213,8 +213,39 @@ object SoulStore {
     private const val FILE_NAME = "SOUL.md"
     private const val MEMORY_SUBDIR = "minis-global/memory"
 
-    fun fileLocation(context: Context): File =
-        File(File(context.filesDir, MEMORY_SUBDIR), FILE_NAME)
+    /**
+     * [T-persona-phase1] Root of every NON-default character's private files.
+     *
+     * The default character keeps the historical flat layout (`minis-global/
+     * memory/SOUL.md`, diary alongside it) so nothing that already exists has to
+     * move — see [personaMemoryDir] for the branch.
+     */
+    private const val PERSONAS_SUBDIR = "minis-global/personas"
+
+    /**
+     * The directory holding one character's SOUL.md, SOUL.icon.png and diary.
+     *
+     * [personaId] null / blank = the built-in default character, which lives at
+     * the historical `minis-global/memory/` — so every pre-persona caller keeps
+     * resolving to exactly the file it used to.
+     *
+     * Any other id gets `minis-global/personas/<id>/memory/`. Deliberately the
+     * same shape the default character has (SOUL + diary in one directory), so
+     * `MemoryRepository(personaDir = …)` and [fileLocation] never disagree about
+     * where a character's files are. Kept OUT of the shared `memory/` root on
+     * purpose: the daily-log scanner there treats every `*.md` sibling as a log
+     * of the default character, and a sibling directory would put another
+     * character's diary into 米米's prompt.
+     */
+    fun personaMemoryDir(context: Context, personaId: String?): File =
+        if (personaId.isNullOrEmpty()) {
+            File(context.filesDir, MEMORY_SUBDIR)
+        } else {
+            File(File(File(context.filesDir, PERSONAS_SUBDIR), personaId), "memory")
+        }
+
+    fun fileLocation(context: Context, personaId: String? = null): File =
+        File(personaMemoryDir(context, personaId), FILE_NAME)
 
     /**
      * [T-android-soul-icon-sidecar] The PNG holding the avatar's bytes, beside
@@ -238,8 +269,8 @@ object SoulStore {
      *     copies every file it finds, so a sibling PNG IS backed up.
      *   - Sync: Android has no SOUL sync path at all (SoulV2 is iOS/iCloud).
      */
-    fun iconFileLocation(context: Context): File =
-        File(File(context.filesDir, MEMORY_SUBDIR), SoulIcon.SIDECAR_NAME)
+    fun iconFileLocation(context: Context, personaId: String? = null): File =
+        File(personaMemoryDir(context, personaId), SoulIcon.SIDECAR_NAME)
 
     // -- Body length rules (language-aware) ----------------------------
     //
@@ -359,8 +390,8 @@ lang: "auto"
      * Create SOUL.md with [DEFAULT_CONTENT] iff it does not exist yet.
      * Safe to call on every launch — never overwrites existing user edits.
      */
-    fun ensureExists(context: Context) {
-        val file = fileLocation(context)
+    fun ensureExists(context: Context, personaId: String? = null) {
+        val file = fileLocation(context, personaId)
         if (file.exists()) return
         try {
             file.parentFile?.mkdirs()
@@ -376,12 +407,12 @@ lang: "auto"
      * missing or unreadable; an empty body parses to default-meta with
      * empty body and callers may treat that as "fall back to default".
      */
-    fun load(context: Context): SoulFile? {
-        val file = fileLocation(context)
+    fun load(context: Context, personaId: String? = null): SoulFile? {
+        val file = fileLocation(context, personaId)
         if (!file.exists()) return null
         return try {
             val parsed = SoulMDParser.parse(file.readText())
-            parsed.copy(metadata = parsed.metadata.copy(icon = resolveIconForRead(context, parsed.metadata.icon)))
+            parsed.copy(metadata = parsed.metadata.copy(icon = resolveIconForRead(context, parsed.metadata.icon, personaId)))
         } catch (t: Throwable) {
             AppLogger.warning(TAG, "SOUL.md load failed: ${t.message}")
             null
@@ -404,9 +435,9 @@ lang: "auto"
      * classified as unsupported and shown as a broken value, whereas "" is the
      * well-defined "no icon, use the default sparkle".
      */
-    private fun resolveIconForRead(context: Context, raw: String): String {
+    private fun resolveIconForRead(context: Context, raw: String, personaId: String? = null): String {
         if (!SoulIcon.isSidecarRef(raw)) return raw
-        val png = runCatching { iconFileLocation(context).takeIf { it.isFile }?.readBytes() }.getOrNull()
+        val png = runCatching { iconFileLocation(context, personaId).takeIf { it.isFile }?.readBytes() }.getOrNull()
         if (png == null || png.isEmpty()) {
             AppLogger.warning(TAG, "SOUL icon sidecar missing or unreadable — treating as no icon")
             return ""
@@ -415,14 +446,14 @@ lang: "auto"
     }
 
     /** Atomic write through a `.tmp` sibling, then rename. */
-    fun save(context: Context, file: SoulFile) {
-        val target = fileLocation(context)
+        fun save(context: Context, file: SoulFile, personaId: String? = null) {
+        val target = fileLocation(context, personaId)
         target.parentFile?.mkdirs()
         // [T-android-soul-icon-sidecar] Move the bytes out to the sidecar and
         // store its NAME in the frontmatter. What goes on disk changes; what
         // callers hold in memory does not — `file` is untouched, and the
         // cached metadata below still carries the data URI.
-        val onDisk = file.copy(metadata = file.metadata.copy(icon = persistIconSidecar(context, file.metadata.icon)))
+        val onDisk = file.copy(metadata = file.metadata.copy(icon = persistIconSidecar(context, file.metadata.icon, personaId)))
         val text = SoulMDParser.serialize(onDisk)
         val tmp = File(target.parentFile, "${target.name}.tmp")
         tmp.writeText(text)
@@ -433,7 +464,7 @@ lang: "auto"
             target.writeText(text)
             tmp.delete()
         }
-        _cachedMetadata.value = file.metadata
+        cacheFor(personaId).value = file.metadata
     }
 
     /**
@@ -446,8 +477,8 @@ lang: "auto"
      * frontmatter at a file that does not exist, and the next load would
      * resolve it to "" — silently losing the icon.
      */
-    private fun persistIconSidecar(context: Context, icon: String): String {
-        val sidecar = iconFileLocation(context)
+    private fun persistIconSidecar(context: Context, icon: String, personaId: String? = null): String {
+        val sidecar = iconFileLocation(context, personaId)
         val png = SoulIcon.pngBytes(icon)
         if (png == null) {
             // Emoji, empty, or already a sidecar ref: no image bytes to keep.
@@ -476,13 +507,44 @@ lang: "auto"
     val cachedMetadata: StateFlow<SoulMetadata> = _cachedMetadata.asStateFlow()
 
     /**
+     * [T-persona-phase1] Per-character metadata caches, keyed by persona id.
+     * The default character keeps using [cachedMetadata] (null key), so every
+     * pre-persona call site is untouched.
+     *
+     * Lives only in memory and starts as [SoulMetadata.DEFAULT]: a caller that
+     * asks for a persona before [refreshCache] ran gets the safe fallback, the
+     * same contract the default character has always had.
+     */
+    private val _personaMetadata =
+        java.util.concurrent.ConcurrentHashMap<String, MutableStateFlow<SoulMetadata>>()
+
+    /** Cache cell for [personaId]; null / blank = the default character. */
+    private fun cacheFor(personaId: String?): MutableStateFlow<SoulMetadata> =
+        if (personaId.isNullOrEmpty()) {
+            _cachedMetadata
+        } else {
+            _personaMetadata.getOrPut(personaId) { MutableStateFlow(SoulMetadata.DEFAULT) }
+        }
+
+    /**
+     * [T-persona-phase1] Read-only view of one character's metadata. The
+     * returned flow is stable for a given id, so it is safe to `collectAsState`
+     * from a composable.
+     */
+    fun cachedMetadataFor(personaId: String?): StateFlow<SoulMetadata> = cacheFor(personaId).asStateFlow()
+
+    /**
      * Re-read SOUL.md into [cachedMetadata]. Call once at app launch
      * (after [ensureExists]) and any time the file is rewritten outside
      * of [save] (currently only the Settings UI uses save()).
+     *
+     * [personaId] null = the default character; any other id refreshes that
+     * character's cell instead. Callers that never heard of personas keep the
+     * old single-argument form and the old behaviour.
      */
-    fun refreshCache(context: Context) {
-        val parsed = load(context)
-        _cachedMetadata.value = parsed?.metadata ?: SoulMetadata.DEFAULT
+    fun refreshCache(context: Context, personaId: String? = null) {
+        val parsed = load(context, personaId)
+        cacheFor(personaId).value = parsed?.metadata ?: SoulMetadata.DEFAULT
     }
 }
 
@@ -565,8 +627,8 @@ object SystemPromptBuilder {
      * sentence alone is the safe fallback when SOUL.md is missing or
      * empty, matching pre-SOUL behavior.
      */
-    fun identitySection(context: Context): String {
-        val file = SoulStore.load(context)
+    fun identitySection(context: Context, personaId: String? = null): String {
+        val file = SoulStore.load(context, personaId)
         val name = (file?.metadata?.name ?: SoulMetadata.DEFAULT.name)
             .trim()
             .ifEmpty { "Minis" }

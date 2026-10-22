@@ -16,7 +16,22 @@ import java.util.Locale
  *   - loadGlobalMemoryFragment() / loadRecentDailyMemoryFragment(): emit
  *     two separate text blocks for the system prompt (mirrors iOS exactly)
  */
-class MemoryRepository(private val memoryDir: File) {
+class MemoryRepository(
+    /**
+     * The SHARED memory root (`minis-global/memory/`) — GLOBAL.md lives here and
+     * is read by every character. Its own daily logs belong to the default
+     * character; another character never writes here.
+     */
+    private val memoryDir: File,
+    /**
+     * [T-persona-phase1] The directory holding THIS character's SOUL.md and
+     * daily logs. Defaults to [memoryDir], i.e. the historical single-character
+     * behaviour, so every existing `MemoryRepository(dir)` call site is
+     * unchanged. A second character gets
+     * `minis-global/personas/<id>/memory/` (see `SoulStore.personaMemoryDir`).
+     */
+    private val personaDir: File = memoryDir,
+) {
 
     companion object {
         private const val TAG = "MemoryRepository"
@@ -56,6 +71,7 @@ class MemoryRepository(private val memoryDir: File) {
 
     init {
         memoryDir.mkdirs()
+        if (personaDir != memoryDir) personaDir.mkdirs()
     }
 
     // -- memory_write --
@@ -70,7 +86,7 @@ class MemoryRepository(private val memoryDir: File) {
 
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val fileName = "${dateFmt.format(Date())}.md"
-        val file = File(memoryDir, fileName)
+        val file = File(personaDir, fileName)
 
         val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
         val timestamp = timeFmt.format(Date())
@@ -113,7 +129,7 @@ class MemoryRepository(private val memoryDir: File) {
         }
 
         // Daily logs sorted descending
-        val dailyFiles = memoryDir.listFiles()
+        val dailyFiles = personaDir.listFiles()
             ?.filter { it.extension == "md" && it.name != GLOBAL_FILE }
             ?.sortedByDescending { it.name }
             ?: emptyList()
@@ -286,7 +302,7 @@ class MemoryRepository(private val memoryDir: File) {
         while (fragments.size < MAX_RECENT_FILES && dayOffset < MAX_LOOKBACK_DAYS) {
             val date = Date(now.time - dayOffset.toLong() * 86400_000L)
             val dateStr = dateFmt.format(date)
-            val file = File(memoryDir, "$dateStr.md")
+            val file = File(personaDir, "$dateStr.md")
 
             if (file.exists()) {
                 val content = try { file.readText() } catch (_: Exception) { "" }
@@ -369,7 +385,7 @@ class MemoryRepository(private val memoryDir: File) {
         ))
 
         // Daily logs sorted descending
-        val dailyFiles = memoryDir.listFiles()
+        val dailyFiles = personaDir.listFiles()
             ?.filter { it.extension == "md" && it.name != GLOBAL_FILE }
             ?.sortedByDescending { it.name }
             ?: emptyList()
@@ -398,17 +414,17 @@ class MemoryRepository(private val memoryDir: File) {
     }
 
     fun readFile(name: String): String {
-        val file = File(memoryDir, name)
+        val file = File(personaDir, name)
         return if (file.exists()) try { file.readText() } catch (_: Exception) { "" } else ""
     }
 
     fun saveFile(name: String, content: String) {
-        File(memoryDir, name).writeText(content)
+        File(personaDir, name).writeText(content)
     }
 
     fun deleteFile(name: String): Boolean {
         if (name == GLOBAL_FILE) return false // Cannot delete GLOBAL.md
-        return File(memoryDir, name).delete()
+        return File(personaDir, name).delete()
     }
 
     // -- Entry-level operations (used by Session Memory revoke/edit) --
@@ -449,7 +465,7 @@ class MemoryRepository(private val memoryDir: File) {
         val markerRegex = Regex("""<!-- \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} -->\n""")
 
         for (dateStr in candidates) {
-            val file = File(memoryDir, "$dateStr.md")
+            val file = File(personaDir, "$dateStr.md")
             if (!file.exists()) continue
             val content = try { file.readText() } catch (_: Exception) { continue }
 
@@ -488,7 +504,7 @@ class MemoryRepository(private val memoryDir: File) {
         val markerRegex = Regex("""<!-- \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} -->\n""")
 
         for (dateStr in candidates) {
-            val file = File(memoryDir, "$dateStr.md")
+            val file = File(personaDir, "$dateStr.md")
             if (!file.exists()) continue
             val content = try { file.readText() } catch (_: Exception) { continue }
 

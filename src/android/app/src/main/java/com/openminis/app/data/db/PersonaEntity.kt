@@ -9,7 +9,7 @@ import androidx.room.PrimaryKey
  *
  * The DEFAULT persona (米米) deliberately has NO row here: `sessions.persona_id
  * = NULL` means "the built-in default", whose SOUL and diary keep living at the
- * historical paths (`minis-global/memory/SOUL.md`, `minis-global/memory/*.md`).
+ * historical paths (`minis-global/memory/SOUL.md`, daily logs beside it).
  * This table only ever holds the *additional* personas, so a database that
  * never leaves phase one stays byte-identical to the pre-phase-one one minus an
  * empty table.

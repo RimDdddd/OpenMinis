@@ -105,10 +105,39 @@ class ChatViewModel(
     private val chatRepository: ChatRepository,
     private val providerRepository: ProviderRepository,
     internal val context: Context,
-    val memoryRepository: MemoryRepository? = null,
+    baseMemoryRepository: MemoryRepository? = null,
     val skillRepository: com.openminis.app.data.repository.SkillRepository? = null,
     val mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
+    /**
+     * [T-persona-phase1] Which character this session speaks as. Null = the
+     * built-in default character (米米), which is what every session created
+     * before personas is, so their behaviour is byte-identical.
+     *
+     * Bound at construction time on purpose: a session's persona is chosen when
+     * it is created and is immutable in phase one, so the view model never has
+     * to hit the database on the UI thread to answer "whose prompt is this?".
+     */
+    val personaId: String? = null,
 ) : ViewModel() {
+
+    /**
+     * [T-persona-phase1] The memory repository THIS session writes to.
+     *
+     * The default character keeps the single shared instance passed in (exactly
+     * as before). Any other character gets a repository whose GLOBAL.md still
+     * comes from the shared `minis-global/memory/` but whose SOUL.md and daily
+     * logs live under `minis-global/personas/<id>/memory/` — so two characters
+     * never read or overwrite each other's diary, while both read the same
+     * GLOBAL.
+     */
+    val memoryRepository: MemoryRepository? = when {
+        personaId.isNullOrEmpty() -> baseMemoryRepository
+        baseMemoryRepository == null -> null
+        else -> MemoryRepository(
+            memoryDir = java.io.File(context.filesDir, "minis-global/memory"),
+            personaDir = com.openminis.app.agent.SoulStore.personaMemoryDir(context, personaId),
+        )
+    }
 
     companion object {
         /**
@@ -660,6 +689,8 @@ class ChatViewModel(
             memoryRepository: MemoryRepository?,
             skillRepository: com.openminis.app.data.repository.SkillRepository?,
             mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
+            // [T-persona-phase1] Null = the built-in default character.
+            personaId: String? = null,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -668,9 +699,10 @@ class ChatViewModel(
                     chatRepository = chatRepository,
                     providerRepository = providerRepository,
                     context = appContext,
-                    memoryRepository = memoryRepository,
+                    baseMemoryRepository = memoryRepository,
                     skillRepository = skillRepository,
                     mcpRepository = mcpRepository,
+                    personaId = personaId,
                 ) as T
             }
         }
@@ -15093,7 +15125,7 @@ class ChatViewModel(
         val identitySection = helperConfig?.let {
             com.openminis.app.agent.jobs.HelperRunner.identitySection(it, browserEnabled = browserToolEnabled)
         }
-            ?: com.openminis.app.agent.SystemPromptBuilder.identitySection(context)
+            ?: com.openminis.app.agent.SystemPromptBuilder.identitySection(context, personaId)
         // [T-memory-toggle-gates-injection-and-tools-android] Mirror the iOS
         // gate: when memory is disabled for this session, replace the
         // "memory_write / memory_get" tool bullets and the "Memory system:"
