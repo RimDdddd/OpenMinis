@@ -18,6 +18,11 @@ object MemoryTools {
                 put("type", "string")
                 put("description", "A concise 5-10 word summary of what this tool call does, shown to the user (e.g. 'Save user preference for Python', 'Note today's project context'). Use the same language as the user.")
             })
+            put("scope", JSONObject().apply {
+                put("type", "string")
+                put("enum", JSONArray().apply { put("daily"); put("longterm"); put("shared") })
+                put("description", "Where to write: daily (default), longterm (your own LONGTERM.md), shared (append to GLOBAL.md).")
+            })
             put("content", JSONObject().apply {
                 put("type", "string")
                 put("description", "The memory content to write. Use concise Markdown with a short heading (## Topic) and context about what was done/learned.")
@@ -26,7 +31,7 @@ object MemoryTools {
 
         return JSONObject().apply {
             put("name", "memory_write")
-            put("description", "Write a memory entry to today's daily log (YYYY-MM-DD.md). Memories persist across all sessions. Each entry is prepended with a timestamp. Save: user preferences, recurring patterns, key facts, project conventions, reusable knowledge. Avoid saving passwords, API keys, tokens, or secrets unless the user explicitly confirms after being warned. Keep entries concise and general-purpose. GLOBAL.md is read-only (user-maintained via Settings).")
+            put("description", "Write a memory entry. scope='daily' (default) appends to today's daily log (YYYY-MM-DD.md); scope='longterm' appends to your OWN LONGTERM.md (durable facts about yourself, the user and what happened between you; no other character reads it); scope='shared' appends to GLOBAL.md, which every character reads — append-only, never rewrite it. Avoid saving passwords, API keys, tokens, or secrets unless the user explicitly confirms after being warned.")
             put("input_schema", JSONObject().apply {
                 put("type", "object")
                 put("properties", properties)
@@ -103,17 +108,34 @@ object MemoryTools {
         val toolTitle: String = "",
     )
 
-    fun executeMemoryWrite(inputJson: String, repository: MemoryRepository): ToolResult {
+    fun executeMemoryWrite(
+        inputJson: String,
+        repository: MemoryRepository,
+        // [T-private-longterm] Who is writing — used to sign entries appended to
+        // the SHARED GLOBAL.md, where two characters write into one file and a
+        // bare paragraph would leave "who said this" unanswerable.
+        author: String? = null,
+    ): ToolResult {
         return try {
             val obj = JSONObject(inputJson)
             val content = obj.optString("content", "")
             val toolTitle = obj.optString("tool_title", "memory_write")
+            // [T-private-longterm] Where the entry lands:
+            //   daily    (default) today's YYYY-MM-DD.md — the historical behaviour
+            //   longterm this character's own LONGTERM.md, nobody else reads it
+            //   shared   append to the shared GLOBAL.md every character reads
+            val scope = obj.optString("scope", "daily").lowercase()
+            val signer = obj.optString("author", "").ifBlank { author }
 
             if (content.isBlank()) {
                 ToolResult("Error: Missing required 'content' parameter", false, toolTitle)
             } else {
-                val result = repository.writeMemory(content)
-                val success = result.startsWith("Memory saved")
+                val result = when (scope) {
+                    "longterm", "long-term", "private" -> repository.writeLongTerm(content)
+                    "shared", "global" -> repository.appendShared(content, signer)
+                    else -> repository.writeMemory(content)
+                }
+                val success = !result.startsWith("Error")
                 ToolResult(result, success, toolTitle)
             }
         } catch (e: Exception) {

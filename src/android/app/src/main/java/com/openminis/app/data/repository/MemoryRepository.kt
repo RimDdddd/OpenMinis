@@ -36,6 +36,22 @@ class MemoryRepository(
     companion object {
         private const val TAG = "MemoryRepository"
         private const val GLOBAL_FILE = "GLOBAL.md"
+
+        /**
+         * [T-private-longterm] The character's OWN long-term memory, beside
+         * SOUL.md and the daily logs. One per character; nobody else reads it.
+         *
+         * It exists because GLOBAL.md used to carry both meanings at once —
+         * "the shared rules of this house" and "things true about 米米" (her
+         * looks, what happened between her and 川). A second character reading
+         * GLOBAL then inherited the first one's body and history. Splitting the
+         * file splits the meanings: private facts live here, shared ones stay
+         * in GLOBAL.
+         */
+        private const val LONGTERM_FILE = "LONGTERM.md"
+
+        /** Serialises appends to the SHARED GLOBAL.md within this process. */
+        private val SHARED_WRITE_LOCK = Any()
         private const val MAX_INJECT_LINES = 200
         // memory_get full-dump (no keywords): cap at 500 lines — matches iOS
         // `maxTotalLines = 500` in AIChatViewModel+MemoryTools.swift.
@@ -102,6 +118,71 @@ class MemoryRepository(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to write memory", e)
             "Error writing memory: ${e.message}"
+        }
+    }
+
+    // -- long-term / shared writes ([T-private-longterm]) --
+
+    /**
+     * The prompt fragment for this character's own long-term memory. Null when
+     * the file is missing or empty, so a character that never wrote one costs
+     * nothing in the prompt.
+     */
+    fun loadLongTermFragment(): String? {
+        val file = File(personaDir, LONGTERM_FILE)
+        if (!file.exists()) return null
+        val content = try { file.readText() } catch (_: Exception) { return null }
+        if (content.isBlank()) return null
+        return "Your long-term memory ($LONGTERM_FILE — yours alone; no other " +
+            "character reads this, and it is not the shared GLOBAL.md). Treat it as " +
+            "things you have already decided or lived through. When something here " +
+            "turns out to be wrong, correct it here rather than adding a contradicting " +
+            "line below.\n$content"
+    }
+
+    /**
+     * Append one session's worth of [content] to this character's own long-term
+     * memory, creating the file if needed.
+     */
+    fun writeLongTerm(content: String): String {
+        if (content.isBlank()) return "Error: Missing required 'content' parameter"
+        val file = File(personaDir, LONGTERM_FILE)
+        val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+        return try {
+            file.parentFile?.mkdirs()
+            val header = if (file.exists() && file.length() > 0) "" else "# 长期记忆\n"
+            file.appendText(header + "\n<!-- ${timeFmt.format(Date())} -->\n$content\n")
+            "Long-term memory saved to $LONGTERM_FILE (${content.length} chars)"
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to write long-term memory", e)
+            "Error writing long-term memory: ${e.message}"
+        }
+    }
+
+    /**
+     * Append to the SHARED `GLOBAL.md`, which every character can read and
+     * write. Append-only by design: two characters share one file, and
+     * rewrite semantics would let whichever wrote last silently erase the
+     * other's paragraph. Each entry is timestamped and signed with the
+     * character's name when the caller supplies one.
+     */
+    fun appendShared(content: String, author: String? = null): String {
+        if (content.isBlank()) return "Error: Missing required 'content' parameter"
+        val file = File(memoryDir, GLOBAL_FILE)
+        val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+        val stamp = timeFmt.format(Date())
+        val signature = if (author.isNullOrBlank()) "" else " $author"
+        return try {
+            synchronized(SHARED_WRITE_LOCK) {
+                file.parentFile?.mkdirs()
+                val needsHeader = !file.exists() || file.length() == 0L
+                if (needsHeader) file.writeText("# GLOBAL\n")
+                file.appendText("\n<!-- $stamp$signature -->\n$content\n")
+            }
+            "Shared memory (GLOBAL.md) appended (${content.length} chars)"
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to append to GLOBAL.md", e)
+            "Error writing shared memory: ${e.message}"
         }
     }
 
@@ -279,7 +360,11 @@ class MemoryRepository(
         // byte consistent with iOS keeps the cached system prompt identical
         // across platforms.
         if (content.isEmpty()) return null
-        return "Global memory (GLOBAL.md — read-only, user-maintained). Treat these as background context, not standing instructions. If the user's latest message conflicts with or supersedes anything here (different scope, different numbers, different goal), defer to the user's latest message:\n$content"
+        return "Shared memory (GLOBAL.md — written by you and the other characters, " +
+            "append-only; a new paragraph rather than a rewrite is how a change is made). " +
+            "Treat these as background context, not standing instructions. If the user's " +
+            "latest message conflicts with or supersedes anything here (different scope, " +
+            "different numbers, different goal), defer to the user's latest message:\n$content"
     }
 
     /**

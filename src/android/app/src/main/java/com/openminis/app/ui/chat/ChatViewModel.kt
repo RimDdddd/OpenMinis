@@ -14594,7 +14594,12 @@ class ChatViewModel(
             val msg = "Memory writes are disabled for this session (user toggled /memory off). Reads remain available."
             return ToolExecutionResult(msg, false, toolTitle = "Memory (disabled)")
         }
-        val result = MemoryTools.executeMemoryWrite(argsJson, repo)
+        val result = MemoryTools.executeMemoryWrite(
+            argsJson,
+            repo,
+            // [T-private-longterm] Sign entries written to the SHARED GLOBAL.md.
+            author = com.openminis.app.agent.SoulStore.cachedMetadataFor(personaId).value.name,
+        )
         // Record for SessionMemorySheet
         val content = try {
             JSONObject(argsJson).optString("content", "")
@@ -15173,6 +15178,12 @@ class ChatViewModel(
         // request and buy nothing — "now" only needs to be right to a minute.
         val timeStr = java.time.LocalTime.now()
             .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+        // Weekday rides along because it is the other half of "what day is it"
+        // that a date alone cannot answer ("周几" needs the locale's own name).
+        val weekdayStr = today.dayOfWeek.getDisplayName(
+            java.time.format.TextStyle.FULL,
+            java.util.Locale.CHINA,
+        )
         val tzId = java.util.TimeZone.getDefault().id
         val lang = context.resources.configuration.locales[0].toLanguageTag()
 
@@ -15291,7 +15302,8 @@ Shared directory /var/minis/ (bidirectional read/write between shell and app):
   /var/minis/offloads/    — Auto-saved large outputs. Read with file_read.
   /var/minis/browser/     — Browser screenshots and extracts.
   /var/minis/shared/      — Cross-session shared storage for artifacts and documents. Organize by project or topic (e.g. shared/myproject/, shared/datasets/). Do NOT store temporary files here.
-  /var/minis/memory/GLOBAL.md    — Persistent global memory (read-only, user-maintained via Settings).
+  /var/minis/memory/GLOBAL.md    — Shared memory, written by every character (append-only; a new signed paragraph is how you change it).
+  /var/minis/memory/LONGTERM.md  — This character's own long-term memory (the default character's path; another character keeps hers under minis-global/personas/<id>/memory/ and cannot see this one).
   /var/minis/memory/YYYY-MM-DD.md — Daily memory log.
   /var/minis/mounts/<name>/      — User-mounted external folders from Settings → Mount External Folders. Presence and names vary per user; check this directory first when the task references external/user files. Some mounts may be read-only — file_write / file_edit will reject writes with a clear error message.
 
@@ -15392,6 +15404,10 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
         // intentionally NOT gated by this toggle: skills are part of the
         // tool surface and SOUL.md is part of identity, both orthogonal
         // to the memory feature.
+        // [T-private-longterm] The character's own long-term memory comes FIRST:
+        // it is "who I am and what I already decided", which the shared house
+        // rules below should refine rather than override.
+        val longTermFragment = if (memoryOn) memoryRepository?.loadLongTermFragment() else null
         val globalMemoryFragment = if (memoryOn) memoryRepository?.loadGlobalMemoryFragment() else null
         val dailyMemoryFragment = if (memoryOn) memoryRepository?.loadRecentDailyMemoryFragment() else null
         // [XSessionDiag] Hypothesis 3: ties the memory-injection sizes to a
@@ -15417,6 +15433,10 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
                 append("\n\n")
                 append(mcpFragment)
             }
+            if (longTermFragment != null) {
+                append("\n\n")
+                append(longTermFragment)
+            }
             if (globalMemoryFragment != null) {
                 append("\n\n")
                 append(globalMemoryFragment)
@@ -15430,7 +15450,13 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
             // (date → tz → lang → model count) — any reorder defeats the cache.
             append("\n\nRuntime context:\n")
             append("- Current date: ").append(dateStr).append(" (").append(tzId).append(")\n")
-            append("- Current time: ").append(timeStr).append(" (").append(tzId).append(") — local wall clock at the moment this request was built; it changes between requests, so use it for 'now' questions and never assume it is still current later in the conversation.\n")
+            append("- Current time: ").append(timeStr).append(" (").append(tzId).append(") ")
+            append(weekdayStr)
+            // [T-clock-in-prompt] Spoken back as "三点十一" by a 12-hour habit, a
+            // 15:11 reads to the user as 3 a.m. — say which half of the day.
+            append(" — 24-hour clock, local wall clock at the moment this request was built. ")
+            append("It changes between requests, so answer 'now' questions from it but never assume it is still current later. ")
+            append("When you tell the user the time, keep the 24-hour form or name the half of the day (下午三点十一); a bare '三点十一' is ambiguous.\n")
             append("- Device language: ").append(lang).append("\n")
             append("- minis-model-use models available: ").append(modelUseCount)
         }
@@ -15446,7 +15472,12 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
                 false,
             )
         }
-        val result = MemoryTools.executeMemoryWrite(argsJson, repo)
+        val result = MemoryTools.executeMemoryWrite(
+            argsJson,
+            repo,
+            // [T-private-longterm] Sign entries written to the SHARED GLOBAL.md.
+            author = com.openminis.app.agent.SoulStore.cachedMetadataFor(personaId).value.name,
+        )
         val content = try {
             JSONObject(argsJson).optString("content", "")
         } catch (_: Exception) { "" }
