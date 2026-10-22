@@ -596,6 +596,16 @@ fun ChatScreen(
     // Callers needing the full history (compact / fork / regenerate / send)
     // continue to read viewModel.messages directly inside the VM.
     val messages by viewModel.uiMessages.collectAsState()
+    // [T-persona-phase1] Observe the session's character instead of reading
+    // `viewModel.personaId` (a snapshot of a private flow).
+    //
+    // The persona is resolved ASYNCHRONOUSLY — the row it lives on has to be
+    // read from the database, and a draft's id has to be parsed. Reading the
+    // value once, in composition, froze whatever it happened to be at that
+    // instant: null on the first frame, which resolves to the DEFAULT
+    // character, so the bubble said 米米 forever even after the right id
+    // arrived. Collecting the flow makes the header repaint when it lands.
+    val sessionPersonaId by viewModel.personaIdFlow.collectAsState()
     // [T-android-usage-capsule-style] Which replies currently show their usage
     // capsule. Empty by default — it is revealed by tapping the reply's tail.
     val revealedUsageIds by viewModel.revealedUsageIds.collectAsState()
@@ -4506,7 +4516,7 @@ fun ChatScreen(
                                 },
                             )
                             } // close UserBubble SideEffect + UserMessageBubble block
-                            is FlatChatItem.AssistantHeader -> AssistantHeader(viewModel.personaId)
+                            is FlatChatItem.AssistantHeader -> AssistantHeader(sessionPersonaId)
                             is FlatChatItem.AssistantText -> BoundsTrackedBlock(
                                 messageId = item.messageId,
                                 slotKey = "text:${item.block.id}",
