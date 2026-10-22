@@ -37,6 +37,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -96,6 +97,11 @@ fun MemoryManagementScreen(
         }
     }
     val selectedPersonaName = personas.firstOrNull { it.id == selectedPersonaId }?.name
+    // [T-private-longterm] The default character's chip says HER NAME, not the
+    // page title. "记忆 / 妙妙" reads like two features; "米米 / 妙妙" reads like
+    // two people, which is what the switcher is for.
+    val defaultPersonaName = com.openminis.app.agent.SoulStore.cachedMetadataFor(null)
+        .collectAsState().value.name.ifBlank { "默认角色" }
     // [T-memory-global-toggle-settings-ui-android] Global default for
     // newly-created sessions. Stored separately from per-session
     // memoryEnabled (which lives in the sessions DB row) so toggling
@@ -127,7 +133,7 @@ fun MemoryManagementScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     MemoryPersonaChip(
-                        label = stringResource(R.string.memory_title),
+                        label = defaultPersonaName,
                         selected = selectedPersonaId == null,
                         onClick = { selectedPersonaId = null },
                     )
