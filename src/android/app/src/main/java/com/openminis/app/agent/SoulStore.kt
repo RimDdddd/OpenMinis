@@ -432,23 +432,34 @@ lang: "auto"
      * created before this code shipped can be in.)
      */
     fun ensurePersonaFile(context: Context, personaId: String?, name: String) {
-        if (personaId.isNullOrEmpty()) return
+        if (personaId.isNullOrEmpty() || name.isBlank()) return
         val file = fileLocation(context, personaId)
-        if (file.exists()) return
-        save(
-            context,
-            SoulFile(
-                SoulMetadata(
-                    name = name.ifBlank { SoulMetadata.DEFAULT.name },
-                    emoji = "",
-                    icon = "",
-                    style = "",
-                    lang = "auto",
+        if (!file.exists()) {
+            save(
+                context,
+                SoulFile(
+                    SoulMetadata(
+                        name = name,
+                        emoji = "",
+                        icon = "",
+                        style = "",
+                        lang = "auto",
+                    ),
+                    "",
                 ),
-                "",
-            ),
-            personaId,
-        )
+                personaId,
+            )
+            return
+        }
+        // Repair in place: a build between phase-one and this fix called
+        // [ensureExists], which writes DEFAULT_CONTENT — frontmatter
+        // `name: "Minis"`. A character seeded that way answers to ANY name the
+        // user calls her, because the prompt says she is "Minis" and nothing
+        // tells her otherwise. Rename it to the personas row's name, keep the
+        // body (the user may have started writing one).
+        val parsed = runCatching { SoulMDParser.parse(file.readText()) }.getOrNull() ?: return
+        if (parsed.metadata.name != SoulMetadata.DEFAULT.name) return
+        save(context, parsed.copy(metadata = parsed.metadata.copy(name = name)), personaId)
     }
 
     fun load(context: Context, personaId: String? = null): SoulFile? {
