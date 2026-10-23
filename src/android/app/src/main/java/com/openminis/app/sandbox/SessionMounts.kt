@@ -91,6 +91,8 @@ object SessionMounts {
             "/var/minis/memory/SOUL.icon.png" to File(characterRoot, "SOUL.icon.png"),
             "/var/minis/memory/LONGTERM.md" to File(characterRoot, "LONGTERM.md"),
             "/var/minis/memory/GLOBAL.md" to File(globalBase, "GLOBAL.md"),
+            // [T-persona-phase2] The house's event log, shared like GLOBAL.
+            "/var/minis/memory/SCENE.md" to File(globalBase, "SCENE.md"),
             // [T-rooms] The room map, so a character can see who is standing
             // where from a shell (`cat /var/minis/rooms.json`) instead of
             // spending a tool call on it. Bound only when the file exists —

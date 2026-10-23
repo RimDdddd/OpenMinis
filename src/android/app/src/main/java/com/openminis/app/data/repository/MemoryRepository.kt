@@ -57,6 +57,18 @@ class MemoryRepository(
          */
         private const val LONGTERM_FILE = "LONGTERM.md"
 
+        /**
+         * [T-persona-phase2] What has been happening in the house — the one
+         * thing every character reads, written by whoever was there.
+         *
+         * GLOBAL.md is for RULES ("this is how we live here"); this is for
+         * events ("tonight we moved the bookshelf"). Without it two characters
+         * have nothing in common to talk about: each one's diary is written for
+         * herself, about 川, and a conversation built out of two private
+         * monologues keeps coming back to him.
+         */
+        private const val SCENE_FILE = "SCENE.md"
+
         /** Serialises appends to the SHARED GLOBAL.md within this process. */
         private val SHARED_WRITE_LOCK = Any()
         private const val MAX_INJECT_LINES = 200
@@ -192,6 +204,47 @@ class MemoryRepository(
             Log.e(TAG, "Failed to append to GLOBAL.md", e)
             "Error writing shared memory: ${e.message}"
         }
+    }
+
+    /**
+     * [T-persona-phase2] Append to the shared house log.
+     *
+     * Deliberately append-only like GLOBAL.md, but unlike GLOBAL this one is
+     * expected to be noisy: it is the "what happened" tape, not the rulebook.
+     */
+    fun appendScene(content: String, author: String? = null): String {
+        if (content.isBlank()) return "Error: Missing required 'content' parameter"
+        val file = File(memoryDir, SCENE_FILE)
+        val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+        val stamp = timeFmt.format(Date())
+        val signature = if (author.isNullOrBlank()) "" else " $author"
+        return try {
+            synchronized(SHARED_WRITE_LOCK) {
+                file.parentFile?.mkdirs()
+                if (!file.exists() || file.length() == 0L) file.writeText("# 这屋\n")
+                file.appendText("\n<!-- $stamp$signature -->\n$content\n")
+            }
+            "House log (SCENE.md) appended (${content.length} chars)"
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to append to SCENE.md", e)
+            "Error writing house log: ${e.message}"
+        }
+    }
+
+    /**
+     * [T-persona-phase2] The house log as a prompt fragment.
+     *
+     * Tail-capped: the tape grows forever, and a prompt that grows with it would
+     * eventually cost more than the conversation. The last ~2000 chars are what
+     * "recently" means here.
+     */
+    fun loadSceneFragment(): String? {
+        val file = File(memoryDir, SCENE_FILE)
+        if (!file.isFile) return null
+        val text = runCatching { file.readText() }.getOrNull()?.trim().orEmpty()
+        if (text.isEmpty()) return null
+        val tail = if (text.length > 2000) "…\n" + text.takeLast(2000) else text
+        return "## 这屋最近（所有人一起看的）\n$tail"
     }
 
     // -- memory_get --

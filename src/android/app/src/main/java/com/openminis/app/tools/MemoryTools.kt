@@ -20,8 +20,8 @@ object MemoryTools {
             })
             put("scope", JSONObject().apply {
                 put("type", "string")
-                put("enum", JSONArray().apply { put("daily"); put("longterm"); put("shared") })
-                put("description", "Where to write: daily (default), longterm (your own LONGTERM.md), shared (append to GLOBAL.md).")
+                put("enum", JSONArray().apply { put("daily"); put("longterm"); put("shared"); put("scene") })
+                put("description", "Where to write: daily (default), longterm (your own LONGTERM.md), shared (append to GLOBAL.md), scene (append to the house log SCENE.md — events, not rules).")
             })
             put("content", JSONObject().apply {
                 put("type", "string")
@@ -31,7 +31,7 @@ object MemoryTools {
 
         return JSONObject().apply {
             put("name", "memory_write")
-            put("description", "Write a memory entry. scope='daily' (default) appends to today's daily log (YYYY-MM-DD.md); scope='longterm' appends to your OWN LONGTERM.md (durable facts about yourself, the user and what happened between you; no other character reads it); scope='shared' appends to GLOBAL.md, which every character reads — append-only, never rewrite it. Avoid saving passwords, API keys, tokens, or secrets unless the user explicitly confirms after being warned.")
+            put("description", "Write a memory entry. scope='daily' (default) appends to today's daily log (YYYY-MM-DD.md); scope='longterm' appends to your OWN LONGTERM.md (durable facts about yourself, the user and what happened between you; no other character reads it); scope='shared' appends to GLOBAL.md, which every character reads — append-only, never rewrite it; scope='scene' appends to the house log SCENE.md (what happened in a room, for everyone who was there or wants to know). Avoid saving passwords, API keys, tokens, or secrets unless the user explicitly confirms after being warned.")
             put("input_schema", JSONObject().apply {
                 put("type", "object")
                 put("properties", properties)
@@ -133,6 +133,9 @@ object MemoryTools {
                 val result = when (scope) {
                     "longterm", "long-term", "private" -> repository.writeLongTerm(content)
                     "shared", "global" -> repository.appendShared(content, signer)
+                    // [T-persona-phase2] The house's "what happened" tape, read
+                    // by everyone. Rules go to shared; events go here.
+                    "scene", "room", "house" -> repository.appendScene(content, signer)
                     else -> repository.writeMemory(content)
                 }
                 val success = !result.startsWith("Error")

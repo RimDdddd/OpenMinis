@@ -193,16 +193,17 @@ object AgentTools {
     // Aligned with iOS AIChatViewModel.swift:5059-5067
     private fun memoryWriteDefinition(): AgentToolDefinition = AgentToolDefinition(
         name = "memory_write",
-        description = "Write a memory entry. Three scopes: " +
+        description = "Write a memory entry. Four scopes: " +
             "'daily' (default) appends a timestamped entry to today's daily log (YYYY-MM-DD.md); " +
             "'longterm' appends to your OWN long-term memory (LONGTERM.md) — durable facts about yourself, the user, and what happened between you, readable by nobody else; " +
             "'shared' appends to the shared GLOBAL.md that every character reads (house rules, agreements made together). " +
             "Use 'daily' for session notes, 'longterm' when something must survive as part of who you are, 'shared' only for things the other characters also need. " +
+            "'scene' appends to the house log (SCENE.md) — what happened in a room, written for everyone to read; use it when something happened that the others would want to know. " +
             "GLOBAL.md is append-only: never rewrite it, add a new signed paragraph instead. " +
             "Avoid saving passwords, API keys, tokens, or secrets unless the user explicitly confirms after being warned.",
         parameters = mapOf(
             "tool_title" to AgentToolParam("string", "A concise 5-10 word summary of what this tool call does, shown to the user (e.g. 'Save user preference for Python', 'Note today's project context'). Use the same language as the user."),
-            "scope" to AgentToolParam("string", "Where to write: 'daily' (default, today's log), 'longterm' (your own LONGTERM.md), 'shared' (append to GLOBAL.md, read by every character).", enumValues = listOf("daily", "longterm", "shared")),
+            "scope" to AgentToolParam("string", "Where to write: 'daily' (default, today's log), 'longterm' (your own LONGTERM.md), 'shared' (append to GLOBAL.md, read by every character), 'scene' (append to the house log SCENE.md — events, not rules).", enumValues = listOf("daily", "longterm", "shared", "scene")),
             "content" to AgentToolParam("string", "The memory content to write. Use concise Markdown with a short heading (## Topic) and context about what was done/learned."),
         ),
         required = listOf("tool_title", "content"),

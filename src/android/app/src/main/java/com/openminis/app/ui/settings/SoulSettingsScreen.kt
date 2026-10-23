@@ -120,6 +120,10 @@ fun SoulSettingsScreen(
     var name by remember { mutableStateOf(SoulMetadata.DEFAULT.name) }
     var style by remember { mutableStateOf(SoulMetadata.DEFAULT.style) }
     var lang by remember { mutableStateOf(SoulMetadata.DEFAULT.lang) }
+    // [T-persona-phase2] Not editable from this screen (yet): it is carried
+    // through load -> edit -> save so saving a name or a style does not silently
+    // reset how talkative this character is.
+    var talkativeness by remember { mutableStateOf(SoulMetadata.DEFAULT.talkativeness) }
     var body by remember { mutableStateOf("") }
     var loaded by remember { mutableStateOf(false) }
     var showRestoreDialog by remember { mutableStateOf(false) }
@@ -193,6 +197,7 @@ fun SoulSettingsScreen(
         preservedEmoji = parsed.metadata.emoji
         icon = parsed.metadata.icon
         style = parsed.metadata.style
+        talkativeness = parsed.metadata.talkativeness
         lang = parsed.metadata.lang
         body = parsed.body
         // [T-android-soul-save-in-appbar] Snapshot what disk holds, so the
@@ -209,6 +214,7 @@ fun SoulSettingsScreen(
                 emoji = parsed.metadata.emoji.ifBlank { SoulMetadata.DEFAULT.emoji },
                 icon = parsed.metadata.icon,
                 style = parsed.metadata.style,
+                talkativeness = parsed.metadata.talkativeness,
                 lang = parsed.metadata.lang.ifBlank { SoulMetadata.DEFAULT.lang },
             ),
             body = parsed.body,
@@ -234,6 +240,7 @@ fun SoulSettingsScreen(
             emoji = preservedEmoji.ifBlank { SoulMetadata.DEFAULT.emoji },
             icon = icon,
             style = style,
+            talkativeness = talkativeness,
             lang = lang.ifBlank { SoulMetadata.DEFAULT.lang },
         ),
         body = body,

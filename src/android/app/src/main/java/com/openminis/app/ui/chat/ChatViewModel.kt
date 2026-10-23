@@ -269,9 +269,9 @@ class ChatViewModel(
             append("This is a group conversation in one room. People present: ")
             append(participants.map { nameOf(it) }.joinToString(", "))
             append(".\nYou are ").append(nameOf(meKey)).append(". ")
-            append("Their messages arrive as user turns prefixed with their name; ")
-            append("only your own words are assistant turns. ")
-            append("川's lines arrive the same way — the `user` role is just the shape of the wire, ")
+            append("Everyone else's lines arrive as assistant turns carrying their name as a prefix ")
+            append("(妙妙：…); yours are the assistant turns without one. ")
+            append("川's lines arrive as user turns — the `user` role is just the shape of the wire, ")
             append("it does not make him the audience: everyone in this room is a peer, ")
             append("yourself included. ")
             append("Write exactly one turn of your own — never another participant's lines, ")
@@ -410,15 +410,24 @@ class ChatViewModel(
             }
         }
         val rest = participants.filter { it !in mentioned }.shuffled()
-        var order = mentioned + rest
-        if (mentioned.isEmpty() && order.first() == _groupLastSpeaker) {
-            order = order.drop(1) + order.first()
-        }
-        return order
+        // [T-persona-phase2] No more "the previous speaker is skipped": someone
+        // adding one more line after their own is the most human thing in a
+        // chat. Who spoke is no longer ambiguous — every line carries its
+        // speaker's name and a header, so two turns by one person still read as
+        // two turns by one person.
+        return mentioned + rest
     }
 
     /** [T-persona-phase2] Last speaker of the previous round, so a shuffle cannot repeat. */
     private var _groupLastSpeaker: String? = null
+
+    /** [T-persona-phase2] How readily this character speaks unprompted (SOUL field). */
+    private fun talkativenessOf(key: String): Float =
+        if (key == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) {
+            com.openminis.app.agent.SoulStore.cachedMetadataFor(null).value.talkativeness
+        } else {
+            com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.talkativeness
+        }
 
     /** Display name for a participant key, for error notices. */
     private fun groupNameOf(key: String): String =
@@ -457,7 +466,10 @@ class ChatViewModel(
         for ((index, key) in speakers.withIndex()) {
             // The last speaker always speaks: a round where nobody does leaves
             // the user staring at a stopped progress bar.
-            if (sparse && index < speakers.lastIndex && kotlin.random.Random.nextFloat() < 0.25f) {
+            // Each character has her own rate (SOUL `talkativeness`); the last
+            // speaker always speaks so a round never ends in silence.
+            val skipChance = (1f - talkativenessOf(key)).coerceIn(0.05f, 0.9f)
+            if (sparse && index < speakers.lastIndex && kotlin.random.Random.nextFloat() < skipChance) {
                 AppLogger.info(TAG_STREAM, "[group] speaker=$key stays quiet this round")
                 continue
             }
@@ -5052,7 +5064,8 @@ class ChatViewModel(
         val hint = buildString {
             append("（说明：这是同一个房间里的对话，在场的是 ")
             append((others + "川").joinToString("、"))
-            append("。现在轮到你说话，只写 ").append(me).append(" 这一句。")
+            append("。现在轮到你说话，只写 ").append(me).append(" 这一句；")
+            append("用你自己的口吻，别接着上一条别人的自我介绍或独白往下讲。")
             append("对谁说、要不要说给所有人听，你自己判断——")
             append("每个人在这儿都是同伴。不要替别人写，也不要在开头写自己的名字。）")
         }
@@ -5102,8 +5115,15 @@ class ChatViewModel(
             m.sourceDbIds.forEach { id -> speakerByRow[id] = m.speakerId }
         }
 
-        fun LLMMessage.asOtherPerson(prefix: String): LLMMessage = copy(
-            role = LLMMessage.Role.USER,
+        /**
+         * [T-persona-phase2] Prefix a name, keep the turn on the assistant side.
+         *
+         * SillyTavern's rule: `role = is_user ? user : assistant`, and for other
+         * people only the CONTENT gets `name: `. Flipping a peer's turn to
+         * `user` was the whole bug — the model then read another character as
+         * "the user", and adopted her identity in the next reply.
+         */
+        fun LLMMessage.withNamePrefix(prefix: String): LLMMessage = copy(
             content = prefix + content,
             contentParts = if (contentParts.isEmpty()) {
                 contentParts
@@ -5124,22 +5144,17 @@ class ChatViewModel(
         )
 
         return history.map { msg ->
-            if (msg.role == LLMMessage.Role.USER) {
-                msg.asOtherPerson("川：")
-            } else {
-                val speakerKey = com.openminis.app.rooms.RoomLocationStore.keyOf(speakerByRow[msg.dbMessageId])
-                if (speakerKey == meKey) return@map msg
-                // Rewriting an assistant turn that carries tool calls into a
-                // user turn breaks the call/result pairing and the provider
-                // rejects the whole request ("Messages with role 'tool' must be
-                // a response to a preceding message with 'tool_calls'"). Tool
-                // traffic is technical, not conversational: leave it alone and
-                // only restate the plain-text turns.
-                val hasToolTraffic = msg.contentParts.any {
-                    it is AgentContentPart.ToolUse || it is AgentContentPart.ToolResult
-                }
-                if (hasToolTraffic) msg else msg.asOtherPerson(nameOf(speakerKey) + "：")
+            // 川 needs no decoration: he is the only `user` turn in the
+            // transcript, so "who is this" never comes up for him.
+            if (msg.role == LLMMessage.Role.USER) return@map msg
+            val speakerKey = com.openminis.app.rooms.RoomLocationStore.keyOf(speakerByRow[msg.dbMessageId])
+            if (speakerKey == meKey) return@map msg
+            // Tool traffic stays untouched: the prefix would land inside a
+            // tool_use payload and the pairing check rejects the request.
+            val hasToolTraffic = msg.contentParts.any {
+                it is AgentContentPart.ToolUse || it is AgentContentPart.ToolResult
             }
+            if (hasToolTraffic) msg else msg.withNamePrefix(nameOf(speakerKey) + "：")
         }
     }
 
@@ -16124,6 +16139,10 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
         val memoryRepo = memoryRepositoryFor(effectivePersonaId())
         val longTermFragment = if (memoryOn) memoryRepo?.loadLongTermFragment() else null
         val globalMemoryFragment = if (memoryOn) memoryRepo?.loadGlobalMemoryFragment() else null
+        // [T-persona-phase2] What has been happening in the house. Shared like
+        // GLOBAL, but about events rather than rules — the only material two
+        // characters have in common.
+        val sceneFragment = if (memoryOn) memoryRepo?.loadSceneFragment() else null
         val dailyMemoryFragment = if (memoryOn) memoryRepo?.loadRecentDailyMemoryFragment() else null
         // [XSessionDiag] Hypothesis 3: ties the memory-injection sizes to a
         // SESSION id. MemoryRepository itself has no session context, so its own
@@ -16159,6 +16178,10 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
             if (globalMemoryFragment != null) {
                 append("\n\n")
                 append(globalMemoryFragment)
+            }
+            if (sceneFragment != null) {
+                append("\n\n")
+                append(sceneFragment)
             }
             if (dailyMemoryFragment != null) {
                 append("\n\n")
