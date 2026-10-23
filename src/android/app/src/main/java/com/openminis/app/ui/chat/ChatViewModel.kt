@@ -355,22 +355,38 @@ class ChatViewModel(
         if (characters.size < 2) return
         val participants = characters
         val userPresent = _groupParticipants.value.contains(com.openminis.app.rooms.RoomLocationStore.USER_KEY)
+        // A group has no single persona: the sentinel `__default__` is expressed
+        // as null everywhere, so a session that still carries a persona would
+        // answer as THAT character when the built-in one's turn comes up.
+        if (_personaId.value != null) {
+            _personaId.value = null
+            runCatching { chatRepository.dao.updateSessionPersona(realSessionId.ifEmpty { sessionId }, null) }
+        }
         val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
         val restOfRound = participants.dropWhile { it != meKey }.drop(1)
         try {
-            speakAsGroup(restOfRound, provider, fallbackProviders, fallbackStrategy)
+            // The session character has already spoken its line before this
+            // loop, so THIS is round one of the countdown too. Counting it here
+            // is what makes "three rounds" mean six lines instead of eight.
+            var remaining = _groupRoundsRemaining.value
+            val firstClosing = remaining != null && remaining <= 1 && restOfRound.isNotEmpty()
+            speakAsGroup(restOfRound, provider, fallbackProviders, fallbackStrategy, closingLine = firstClosing)
+            if (remaining != null) {
+                remaining -= 1
+                _groupRoundsRemaining.value = remaining
+                if (remaining <= 0) {
+                    _groupRoundsRemaining.value = null
+                    return
+                }
+            }
 
-            // The first round is done (the session character already spoke
-            // before this loop). Decide whether another one begins.
             while (true) {
-                val limit = _groupRoundsRemaining.value
-                val keepGoing = if (limit != null) limit > 0 else !userPresent
+                remaining = _groupRoundsRemaining.value
+                val keepGoing = if (remaining != null) remaining > 0 else !userPresent
                 if (!keepGoing) break
-                if (limit != null) _groupRoundsRemaining.value = limit - 1
-                val isLast = _groupRoundsRemaining.value == 0
-                val order = participants
-                    .filter { it != com.openminis.app.rooms.RoomLocationStore.USER_KEY }
-                    .shuffled()
+                val isLast = remaining != null && remaining <= 1
+                if (remaining != null) _groupRoundsRemaining.value = remaining - 1
+                val order = participants.shuffled()
                 speakAsGroup(order, provider, fallbackProviders, fallbackStrategy, closingLine = isLast)
                 if (isLast) {
                     _groupRoundsRemaining.value = null
@@ -383,6 +399,10 @@ class ChatViewModel(
             _speakerId.value = null
             _groupTyping.value = null
             _groupSpeakerClosing.value = false
+            // A countdown that was interrupted must not survive into the next
+            // message, or a single stop leaves the session quietly wrapping up
+            // three rounds later for no visible reason.
+            _groupRoundsRemaining.value = null
         }
     }
 
@@ -4874,7 +4894,17 @@ class ChatViewModel(
                 msg.asOtherPerson("川：")
             } else {
                 val speakerKey = com.openminis.app.rooms.RoomLocationStore.keyOf(speakerByRow[msg.dbMessageId])
-                if (speakerKey == meKey) msg else msg.asOtherPerson(nameOf(speakerKey) + "：")
+                if (speakerKey == meKey) return@map msg
+                // Rewriting an assistant turn that carries tool calls into a
+                // user turn breaks the call/result pairing and the provider
+                // rejects the whole request ("Messages with role 'tool' must be
+                // a response to a preceding message with 'tool_calls'"). Tool
+                // traffic is technical, not conversational: leave it alone and
+                // only restate the plain-text turns.
+                val hasToolTraffic = msg.contentParts.any {
+                    it is AgentContentPart.ToolUse || it is AgentContentPart.ToolResult
+                }
+                if (hasToolTraffic) msg else msg.asOtherPerson(nameOf(speakerKey) + "：")
             }
         }
     }
@@ -15003,7 +15033,9 @@ class ChatViewModel(
         if (room.isEmpty()) {
             return ToolExecutionResult("Error: 'room' is required.", false, toolTitle = "Move room")
         }
-        val key = com.openminis.app.rooms.RoomLocationStore.keyOf(_personaId.value)
+        // [T-persona-phase2] The SPEAKER moves, not the session: in a group the
+        // second character walking to another room used to move the first one.
+        val key = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
         val snap = com.openminis.app.rooms.RoomLocationStore.moveTo(context, key, room)
         val here = snap.positions.keys
             .filter { it != key }
