@@ -261,11 +261,19 @@ class ChatViewModel(
             }
         val others = participants.filter { it != meKey }.map { nameOf(it) }
         return buildString {
-            append("This is a group conversation. Participants: the user (川), ")
+            // [T-persona-phase2] 川 is a person in the room, not "the user".
+            // The transcript still carries his lines as user turns because that
+            // is what the API has, but the prompt must not tell the model that
+            // one of the three people is the customer and the other two are
+            // here to serve him.
+            append("This is a group conversation in one room. People present: ")
             append(participants.map { nameOf(it) }.joinToString(", "))
             append(".\nYou are ").append(nameOf(meKey)).append(". ")
-            append("The other participants' messages arrive as user turns prefixed with their name; ")
+            append("Their messages arrive as user turns prefixed with their name; ")
             append("only your own words are assistant turns. ")
+            append("川's lines arrive the same way — the `user` role is just the shape of the wire, ")
+            append("it does not make him the audience: everyone in this room is a peer, ")
+            append("yourself included. ")
             append("Write exactly one turn of your own — never another participant's lines, ")
             append("never a summary of what they said. ")
             append("If you have nothing to add, answer with a single \"……\" and nothing else. ")
@@ -275,9 +283,9 @@ class ChatViewModel(
             append("Do not put your name in front of your own reply — the app already shows it. ")
             // Every reply being an answer to 川 is what makes a group read as
             // a Q&A instead of a conversation.
-            append("Take the last message as the one you are answering, whoever wrote it: ")
-            append("talk to the other characters as readily as to 川, and pick up what they said ")
-            append("instead of only answering him. ")
+            append("Who you address is your own call — one person, or the room. ")
+            append("Take the last message as the one you are answering, whoever wrote it, ")
+            append("and carry the room's conversation forward rather than only answering 川. ")
             if (others.isNotEmpty()) append(" The others present: ").append(others.joinToString(", ")).append(".")
             if (_groupSpeakerClosing.value) {
                 append(" This is the LAST line of the conversation: say one short closing line and stop.")
@@ -315,7 +323,9 @@ class ChatViewModel(
         val provider = currentProvider ?: return
         _error.value = null
         _isStreaming.value = true
-        streamLaunched = true
+        // No `streamLaunched` here: that flag belongs to sendMessage's own
+        // setup/finally pair. This entry point sets and clears _isStreaming
+        // inside its own job, so the two cannot disagree.
         streamJob = viewModelScope.launch(Dispatchers.IO) {
             var holdsSlot = false
             try {
@@ -337,11 +347,14 @@ class ChatViewModel(
                 var remaining = _groupRoundsRemaining.value
                 _groupLastSpeaker = null
                 while (true) {
-                    val order = participants.shuffled()
+                    val order = groupTurnOrder(participants)
                     val isLast = remaining != null && remaining <= 1
                     if (remaining != null) _groupRoundsRemaining.value = remaining - 1
                     _groupLastSpeaker = order.lastOrNull()
-                    speakAsGroup(order, provider, fallbacks, strategy, closingLine = isLast)
+                    speakAsGroup(
+                        order, provider, fallbacks, strategy,
+                        closingLine = isLast, sparse = !userPresent,
+                    )
                     if (isLast) {
                         _groupRoundsRemaining.value = null
                         break
@@ -358,6 +371,7 @@ class ChatViewModel(
                 AppLogger.error(TAG_STREAM, "[group] startGroupChat failed: ${e.message}")
                 setInlineError(e.message ?: "群聊启动失败")
             } finally {
+                groupTurnActive = false
                 _speakerId.value = null
                 _groupTyping.value = null
                 _groupSpeakerClosing.value = false
@@ -370,6 +384,37 @@ class ChatViewModel(
                 _isStreaming.value = false
             }
         }
+    }
+
+    /**
+     * [T-persona-phase2] Who speaks, in what order, this round.
+     *
+     * Borrowed from SillyTavern's group activation, minus the parts that need a
+     * per-character dial we do not have yet:
+     *
+     *  - a character NAMED in the last thing 川 said always speaks, and speaks
+     *    first — being called out and having to wait two turns reads as deaf;
+     *  - everyone else is shuffled (the order is the conversation);
+     *  - the previous round's LAST speaker does not open the next one, so a
+     *    two-character group cannot hand the same person three rounds running.
+     */
+    private fun groupTurnOrder(participants: List<String>): List<String> {
+        if (participants.size <= 1) return participants
+        val lastUserText = _messages.value.lastOrNull { it.role == "user" }?.content.orEmpty()
+        val mentioned = if (lastUserText.isBlank()) {
+            emptyList()
+        } else {
+            participants.filter { key ->
+                val name = groupNameOf(key)
+                name.isNotEmpty() && lastUserText.contains(name)
+            }
+        }
+        val rest = participants.filter { it !in mentioned }.shuffled()
+        var order = mentioned + rest
+        if (mentioned.isEmpty() && order.first() == _groupLastSpeaker) {
+            order = order.drop(1) + order.first()
+        }
+        return order
     }
 
     /** [T-persona-phase2] Last speaker of the previous round, so a shuffle cannot repeat. */
@@ -401,10 +446,21 @@ class ChatViewModel(
         fallbackProviders: List<FallbackCandidate>,
         fallbackStrategy: com.openminis.app.data.model.FallbackStrategy,
         closingLine: Boolean = false,
+        // [T-persona-phase2] Let someone stay quiet this round. SillyTavern's
+        // "talkativeness": a group where everybody answers every turn is a
+        // panel discussion, not a room. Only used when 川 is not present —
+        // when he asks something, everybody may answer.
+        sparse: Boolean = false,
     ) {
         val gap = _groupGapSeconds.value
         val speakers = order.filter { it != com.openminis.app.rooms.RoomLocationStore.USER_KEY }
         for ((index, key) in speakers.withIndex()) {
+            // The last speaker always speaks: a round where nobody does leaves
+            // the user staring at a stopped progress bar.
+            if (sparse && index < speakers.lastIndex && kotlin.random.Random.nextFloat() < 0.25f) {
+                AppLogger.info(TAG_STREAM, "[group] speaker=$key stays quiet this round")
+                continue
+            }
             if (gap > 0) {
                 _groupTyping.value = GroupTyping(speakerKey = key, totalMs = gap * 1000L)
                 try {
@@ -418,6 +474,7 @@ class ChatViewModel(
             // both of them turns the closing round into two farewells.
             _groupSpeakerClosing.value = closingLine && index == speakers.lastIndex
             _speakerId.value = speakerPersona
+            groupTurnActive = true
             // [T-persona-phase2] The sandbox mounts `/var/minis/memory` per
             // session, and the mount table is rebuilt on every command — so
             // publishing the speaker here is what makes a shell run by the
@@ -513,16 +570,12 @@ class ChatViewModel(
                 if (!keepGoing) break
                 val isLast = remaining != null && remaining <= 1
                 if (remaining != null) _groupRoundsRemaining.value = remaining - 1
-                // Random order, but never the same person twice in a row: with
-                // two characters a plain shuffle hands ~50% of rounds to the
-                // one who just spoke, and the transcript reads as one of them
-                // repeating herself.
-                var order = participants.shuffled()
-                if (order.size > 1 && order.first() == _groupLastSpeaker) {
-                    order = order.drop(1) + order.first()
-                }
+                val order = groupTurnOrder(participants)
                 _groupLastSpeaker = order.lastOrNull()
-                speakAsGroup(order, provider, fallbackProviders, fallbackStrategy, closingLine = isLast)
+                speakAsGroup(
+                    order, provider, fallbackProviders, fallbackStrategy,
+                    closingLine = isLast, sparse = !userPresent,
+                )
                 if (isLast) {
                     _groupRoundsRemaining.value = null
                     break
@@ -531,6 +584,7 @@ class ChatViewModel(
         } finally {
             // Reset even on cancel/error: a stale speaker would make the NEXT
             // user message answer as the wrong character.
+            groupTurnActive = false
             _speakerId.value = null
             _groupTyping.value = null
             _groupSpeakerClosing.value = false
@@ -4968,8 +5022,46 @@ class ChatViewModel(
      * [dropOrphanedToolParts] for why the sweep exists and what it can and
      * cannot fix.
      */
-    private fun effectiveAgentHistory(): List<LLMMessage> =
-        remapHistoryForSpeaker(dropOrphanedToolParts(effectiveAgentHistoryUncounted()))
+    private fun effectiveAgentHistory(): List<LLMMessage> {
+        val repaired = dropOrphanedToolParts(effectiveAgentHistoryUncounted())
+        return withSpeakerTurnHint(remapHistoryForSpeaker(repaired))
+    }
+
+    /** [T-persona-phase2] True while a group turn is generating (see speakAsGroup). */
+    @Volatile
+    private var groupTurnActive = false
+
+    /**
+     * [T-persona-phase2] Tell the model whose turn this is, as the LAST thing it
+     * reads.
+     *
+     * Prefixing everyone else's lines was not enough on its own: with three
+     * speakers in one transcript the model kept answering 川, because the
+     * nearest "user" turn is his. Naming the current speaker at the tail — the
+     * same trick SillyTavern's group prompts use — turns "continue a chat" into
+     * "write THIS character's next line".
+     *
+     * Not persisted, never rendered: it exists only on the request.
+     */
+    private fun withSpeakerTurnHint(history: List<LLMMessage>): List<LLMMessage> {
+        if (!groupTurnActive) return history
+        if (groupCharacterKeys().size < 2) return history
+        val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
+        val me = groupNameOf(meKey)
+        val others = groupCharacterKeys().filter { it != meKey }.map { groupNameOf(it) }
+        val hint = buildString {
+            append("（说明：这是同一个房间里的对话，在场的是 ")
+            append((others + "川").joinToString("、"))
+            append("。现在轮到你说话，只写 ").append(me).append(" 这一句。")
+            append("对谁说、要不要说给所有人听，你自己判断——")
+            append("每个人在这儿都是同伴。不要替别人写，也不要在开头写自己的名字。）")
+        }
+        return history + LLMMessage(
+            role = LLMMessage.Role.USER,
+            content = hint,
+            contentParts = listOf(AgentContentPart.Text(hint)),
+        )
+    }
 
     /**
      * [T-persona-phase2] Rewrite the outgoing history from the point of view of
