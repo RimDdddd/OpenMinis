@@ -398,7 +398,7 @@ class ChatViewModel(
         // answer as THAT character when the built-in one's turn comes up.
         if (_personaId.value != null) {
             _personaId.value = null
-            runCatching { chatRepository.dao.updateSessionPersona(sid, null) }
+            runCatching { chatRepository.dao.updateSessionPersona(realSessionId.ifEmpty { sessionId }, null) }
         }
         val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
         val restOfRound = participants.dropWhile { it != meKey }.drop(1)
