@@ -5115,8 +5115,10 @@ class ChatViewModel(
                 val who = m.name?.takeIf { it.isNotBlank() } ?: if (m.role == LLMMessage.Role.USER) "川" else meName
                 append(who).append("：").append(m.content.trim()).append("\n")
             }
-            append("\n现在轮到 ").append(meName).append("。接着上面写她这一句——")
-            append("只写她的动作和台词，不要写别人的，也不要在开头写她的名字。")
+            // Second person, not third: "写她这一句" reads as "write HER line",
+            // which is the exact thing this prompt exists to prevent.
+            append("\n现在轮到你（").append(meName).append("）。接着上面写你自己这一句——")
+            append("只写你的动作和台词，不要写别人的，也不要在开头写你的名字。")
         }
         return listOf(
             LLMMessage(
@@ -5155,7 +5157,7 @@ class ChatViewModel(
             )
             append("（说明：这是同一个房间里的对话，在场的是 ")
             append((if (userPresentHere) others + "川" else others).joinToString("、"))
-            append("。现在轮到你说话，只写 ").append(me).append(" 这一句；")
+            append("。现在轮到你（").append(me).append("）说话，只写你自己这一句；")
             append("用你自己的口吻，别接着上一条别人的自我介绍或独白往下讲。")
             append("对谁说、要不要说给所有人听，你自己判断——")
             append("每个人在这儿都是同伴。不要替别人写，也不要在开头写自己的名字。")
