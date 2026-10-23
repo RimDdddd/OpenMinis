@@ -658,6 +658,9 @@ fun ChatScreen(
     // thin waiting bar. Null the rest of the time, so single chats render
     // exactly as before.
     val groupTyping by viewModel.groupTyping.collectAsState()
+    // [T-persona-phase2] Visible countdown: pressing "wrap up in 3 rounds" used
+    // to change nothing on screen, so there was no way to tell it had taken.
+    val groupRoundsLeft by viewModel.groupRoundsRemaining.collectAsState()
     var showGroupMembersDialog by remember { mutableStateOf(false) }
     // [T-persona-phase2] Deliberately NOT auto-starting on open: looking at a
     // conversation must not cost a round of tokens. A group 川 is not part of
@@ -3357,7 +3360,18 @@ fun ChatScreen(
                                 text = { Text(stringResource(R.string.chat_menu_group_continue)) },
                                 onClick = {
                                     showChatMenu = false
-                                    viewModel.startGroupChat()
+                                    if (isStreaming) {
+                                        // [T-persona-phase2] A tap during a turn
+                                        // used to do nothing at all, which reads
+                                        // as a broken button.
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "正在说，等这一句说完",
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    } else {
+                                        viewModel.startGroupChat()
+                                    }
                                 },
                                 leadingIcon = {
                                     MenuItemIcon(Icons.Default.PlayArrow)
@@ -3366,9 +3380,19 @@ fun ChatScreen(
                             // [T-persona-phase2] "Wrap up in three rounds": arm a
                             // countdown; the sixth line closes the conversation.
                             DropdownMenuItem(
-                                text = { Text(stringResource(R.string.chat_menu_group_closing)) },
+                                text = {
+                                    Text(
+                                        if (groupRoundsLeft == null) {
+                                            stringResource(R.string.chat_menu_group_closing)
+                                        } else {
+                                            "还剩 $groupRoundsLeft 轮 · 点一下取消"
+                                        },
+                                    )
+                                },
                                 onClick = {
                                     showChatMenu = false
+                                    // No toast here: the menu item's own label
+                                    // already shows the countdown ("还剩 N 轮").
                                     viewModel.armGroupClosing(
                                         if (viewModel.groupRoundsRemaining.value == null) 3 else null,
                                     )
