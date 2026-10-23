@@ -31,7 +31,9 @@ object StopSequences {
             // "米米：(…)" on the very first line, where "\n米米：" never matches.
             // The no-newline form is a superset — it catches that and the
             // "his line starts on the next paragraph" case alike.
-            .flatMap { name -> listOf("$name：", "$name:") }
+            // Bracketed form too: a name written as "[妙妙] …" is not a colon
+            // form, and the model produced exactly that once it saw one.
+            .flatMap { name -> listOf("$name：", "$name:", "[$name]") }
             .distinct()
             // Most providers cap `stop` at four; two participants plus 川 is
             // already at the limit, and truncating silently is better here than

@@ -275,8 +275,8 @@ class ChatViewModel(
             append("This is a group conversation in one room. People present: ")
             append(participants.map { nameOf(it) }.joinToString(", "))
             append(".\nYou are ").append(nameOf(meKey)).append(". ")
-            append("Everyone else's lines arrive as assistant turns carrying their name in brackets ")
-            append("([妙妙] …); yours are the assistant turns without one. ")
+            append("Everyone else's lines arrive as assistant messages carrying their name ")
+            append("in the message's `name` field; yours carry no name. Nothing is written in the text itself. ")
             if (userPresent) {
                 append("川's lines arrive as user turns — the `user` role is just the shape of the wire, ")
                 append("it does not make him the audience: everyone in this room is a peer, ")
@@ -5186,20 +5186,35 @@ class ChatViewModel(
             },
         )
 
+        // [T-persona-phase2] Walk forward once, remembering who last spoke, so
+        // every line can be labelled "who → whom". The addressee is not stored
+        // anywhere: it is simply the most recent message by somebody else, which
+        // is what the speaker was answering when she wrote this line. Without it
+        // the model has to GUESS who a question was aimed at, and burns a few
+        // hundred reasoning tokens doing it (observed: "轮到我，但她是在问谁").
+        val userKey = com.openminis.app.rooms.RoomLocationStore.USER_KEY
         return history.map { msg ->
-            // 川 needs no decoration: he is the only `user` turn in the
-            // transcript, so "who is this" never comes up for him.
-            if (msg.role == LLMMessage.Role.USER) return@map msg
-            val speakerKey = com.openminis.app.rooms.RoomLocationStore.keyOf(speakerByRow[msg.dbMessageId])
-            if (speakerKey == meKey) return@map msg
-            // Tool traffic stays untouched: the prefix would land inside a
+            val speakerKey = if (msg.role == LLMMessage.Role.USER) {
+                userKey
+            } else {
+                com.openminis.app.rooms.RoomLocationStore.keyOf(speakerByRow[msg.dbMessageId])
+            }
+
+            // Her own words stay bare — that is what "your turn" means.
+            if (speakerKey == meKey && msg.role != LLMMessage.Role.USER) return@map msg
+            // Tool traffic stays untouched: annotating it would corrupt a
             // tool_use payload and the pairing check rejects the request.
             val hasToolTraffic = msg.contentParts.any {
                 it is AgentContentPart.ToolUse || it is AgentContentPart.ToolResult
             }
-            // Bracketed, not "妙妙：…": a colon form is exactly the shell the
-            // model copies when it starts writing somebody else's line.
-            if (hasToolTraffic) msg else msg.withNamePrefix("[" + nameOf(speakerKey) + "] ")
+            if (hasToolTraffic) return@map msg
+
+            // [T-persona-phase2] The name rides in the message's `name` field,
+            // NOT in the text. Anything written into the content is a format
+            // the model reproduces, and what it reproduced was the other
+            // person's name — "[米米] (站起来…)" spoken by 妙妙. A field it never
+            // sees in the text cannot be copied.
+            msg.copy(name = if (speakerKey == userKey) "川" else nameOf(speakerKey))
         }
     }
 
@@ -15809,8 +15824,8 @@ class ChatViewModel(
         var cut = text.length
         for (name in others) {
             if (name.isBlank()) continue
-            for (sep in listOf("：", ":")) {
-                val idx = text.indexOf(name + sep)
+            for (marker in listOf("$name：", "$name:", "[$name]")) {
+                val idx = text.indexOf(marker)
                 if (idx in 0 until cut) cut = idx
             }
         }

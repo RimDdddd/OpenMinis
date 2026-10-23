@@ -29,6 +29,16 @@ data class LLMMessage(
      * reasoning_content once `thinking` is enabled.
      */
     val reasoningContent: String? = null,
+    /**
+     * [T-persona-phase2] Who said this, for a group turn.
+     *
+     * Carried in the OpenAI `name` field instead of inside `content`: a name
+     * written into the text ("[妙妙] …") is a format the model copies, and the
+     * first thing it copies is the OTHER person's name — which is how a
+     * two-character room kept ending with one of them writing the other's line.
+     * A field it cannot see cannot be imitated.
+     */
+    val name: String? = null,
 ) {
     enum class Role(val value: String) {
         USER("user"),

@@ -2523,6 +2523,10 @@ class OpenAIProvider private constructor(
                 // Legacy: plain text messages
                 val obj = JSONObject()
                 obj.put("role", msg.role.value)
+                // [T-persona-phase2] Group turn: who said it rides in `name`,
+                // not in the text (see LLMMessage.name). Providers that ignore
+                // the field simply see an ordinary assistant turn.
+                msg.name?.takeIf { it.isNotBlank() }?.let { obj.put("name", it) }
 
                 if (echoReasoning && msg.role == LLMMessage.Role.ASSISTANT) {
                     val rc = msg.reasoningContent
