@@ -82,13 +82,16 @@ fun RoomMapScreen(onBack: () -> Unit = {}) {
         // count — deeper levels are contents, not rooms.
         val discovered = withContext(Dispatchers.IO) {
             val app = context.applicationContext as? com.openminis.app.MinisApp
+            val known = snapshot.rooms.toSet()
             app?.mountedFoldersStore?.entries?.value
                 ?.mapNotNull { it.resolvedHostPath }
                 ?.flatMap { root ->
-                    File(root).listFiles()
-                        ?.filter { it.isDirectory }
-                        ?.map { it.name }
-                        ?: emptyList()
+                    val children = File(root).listFiles()?.filter { it.isDirectory } ?: emptyList()
+                    // Only a mounted folder that ALREADY contains one of our
+                    // rooms is a room container ("房间加加加"). Any other mount
+                    // — a photo album, a document vault — must not have its
+                    // subfolders turned into rooms just because it is mounted.
+                    if (children.any { it.name in known }) children.map { it.name } else emptyList()
                 }
                 ?.distinct()
                 ?: emptyList()

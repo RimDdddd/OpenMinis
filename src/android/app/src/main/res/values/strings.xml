@@ -1368,6 +1368,7 @@
     <string name="chat_menu_rooms">Rooms</string>
     <string name="chat_menu_group_members">Group members</string>
     <string name="chat_menu_group_closing">Wrap up in 3 rounds</string>
+    <string name="chat_menu_group_continue">Let them talk</string>
     <string name="sessionlist_rooms">Rooms</string>
     <string name="rooms_title">Rooms</string>
     <string name="rooms_you_are_in">You are in %1$s</string>

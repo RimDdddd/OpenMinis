@@ -659,6 +659,20 @@ fun ChatScreen(
     // exactly as before.
     val groupTyping by viewModel.groupTyping.collectAsState()
     var showGroupMembersDialog by remember { mutableStateOf(false) }
+    val groupParticipants by viewModel.groupParticipants.collectAsState()
+    // [T-persona-phase2] A group 川 is not part of has nobody to prompt it, so
+    // opening the session starts the first round. Once per opening — a
+    // recomposition must not start a second one.
+    var autoStartedGroup by remember(sessionId) { mutableStateOf(false) }
+    LaunchedEffect(groupParticipants) {
+        if (!autoStartedGroup &&
+            groupParticipants.size > 1 &&
+            !groupParticipants.contains(RoomLocationStore.USER_KEY)
+        ) {
+            autoStartedGroup = true
+            viewModel.startGroupChat()
+        }
+    }
     val error by viewModel.error.collectAsState()
     val modelName by viewModel.modelName.collectAsState()
     val sessionTitle by viewModel.sessionTitle.collectAsState()
@@ -3343,6 +3357,19 @@ fun ChatScreen(
                                 },
                                 leadingIcon = {
                                     MenuItemIcon(Icons.Outlined.MeetingRoom)
+                                },
+                            )
+                            // [T-persona-phase2] Start (or resume, after a stop)
+                            // a round without a user message — the only way a
+                            // group 川 is not part of can continue.
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_menu_group_continue)) },
+                                onClick = {
+                                    showChatMenu = false
+                                    viewModel.startGroupChat()
+                                },
+                                leadingIcon = {
+                                    MenuItemIcon(Icons.Default.PlayArrow)
                                 },
                             )
                             // [T-persona-phase2] "Wrap up in three rounds": arm a

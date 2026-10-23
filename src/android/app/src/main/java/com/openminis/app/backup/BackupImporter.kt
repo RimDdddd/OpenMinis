@@ -740,7 +740,17 @@ class BackupImporter(
                         ),
                     )
                 }
-                if (rows.isNotEmpty()) dao.insertAll(rows)
+                // Drop members whose character is not in this backup: a
+                // membership row pointing at a persona that does not exist
+                // renders as an empty seat in the member list and as a speaker
+                // the group loop can never resolve.
+                val known = runCatching { db.personaDao().getAll().map { it.id }.toSet() }.getOrDefault(emptySet())
+                val usable = rows.filter {
+                    it.personaId == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME ||
+                        it.personaId == com.openminis.app.rooms.RoomLocationStore.USER_KEY ||
+                        known.contains(it.personaId)
+                }
+                if (usable.isNotEmpty()) dao.insertAll(usable)
                 report.filesWritten += 1
                 report.bytesWritten += groupsIndex.length()
             }

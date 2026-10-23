@@ -191,6 +191,8 @@ class ChatViewModel(
         // A single chat's speaker is always the session's own persona; leaving a
         // stale override set would make the next message answer as somebody else.
         if (groupCharacterKeys().size < 2) _speakerId.value = null
+        // A different session must not inherit the previous one's speaker history.
+        _groupLastSpeaker = null
     }
 
     /** Replace the participant list and switch the session into/out of group mode. */
@@ -271,6 +273,11 @@ class ChatViewModel(
             // own lines too ("妙妙：…"), which then renders as if she were
             // narrating herself. Say it once, plainly.
             append("Do not put your name in front of your own reply — the app already shows it. ")
+            // Every reply being an answer to 川 is what makes a group read as
+            // a Q&A instead of a conversation.
+            append("Take the last message as the one you are answering, whoever wrote it: ")
+            append("talk to the other characters as readily as to 川, and pick up what they said ")
+            append("instead of only answering him. ")
             if (others.isNotEmpty()) append(" The others present: ").append(others.joinToString(", ")).append(".")
             if (_groupSpeakerClosing.value) {
                 append(" This is the LAST line of the conversation: say one short closing line and stop.")
@@ -286,6 +293,88 @@ class ChatViewModel(
      * never takes a generated turn and is never introduced to the model as one
      * of the speakers.
      */
+    private fun groupCharacterKeys(): List<String> =
+        _groupParticipants.value.filter { it != com.openminis.app.rooms.RoomLocationStore.USER_KEY }
+
+    /**
+     * [T-persona-phase2] Start a round WITHOUT a user message.
+     *
+     * A group with 川 left out has no one to prompt it, so the conversation has
+     * to be started by the app: opening the session starts one round, and the
+     * same entry point re-starts it after the user stops. Everything the send
+     * path would otherwise do for the first line (a persisted user row) is
+     * deliberately skipped — nobody said anything, and a fake bubble would sit
+     * in the transcript forever.
+     *
+     * Refuses while a turn is running: two loops writing the same session would
+     * interleave their turns.
+     */
+    fun startGroupChat() {
+        if (_isStreaming.value) return
+        if (groupCharacterKeys().size < 2) return
+        val provider = currentProvider ?: return
+        _error.value = null
+        _isStreaming.value = true
+        streamLaunched = true
+        streamJob = viewModelScope.launch(Dispatchers.IO) {
+            var holdsSlot = false
+            try {
+                SessionConcurrencyManager.acquireSlot(activeSessionId)
+                holdsSlot = true
+                reloadGroupParticipants()
+                if (groupCharacterKeys().size < 2) return@launch
+                val strategy = run {
+                    val groupId = _selectedGroupId.value
+                    groupId?.let { gid ->
+                        providerRepository.config.value.modelGroups.find { it.id == gid }?.fallbackStrategy
+                    } ?: com.openminis.app.data.model.FallbackStrategy.default
+                }
+                val fallbacks = buildFallbackProviders(provider)
+                val participants = groupCharacterKeys()
+                val userPresent = _groupParticipants.value.contains(
+                    com.openminis.app.rooms.RoomLocationStore.USER_KEY,
+                )
+                var remaining = _groupRoundsRemaining.value
+                _groupLastSpeaker = null
+                while (true) {
+                    val order = participants.shuffled()
+                    val isLast = remaining != null && remaining <= 1
+                    if (remaining != null) _groupRoundsRemaining.value = remaining - 1
+                    _groupLastSpeaker = order.lastOrNull()
+                    speakAsGroup(order, provider, fallbacks, strategy, closingLine = isLast)
+                    if (isLast) {
+                        _groupRoundsRemaining.value = null
+                        break
+                    }
+                    remaining = _groupRoundsRemaining.value
+                    // Without 川 in the room this loops until stopped; with him
+                    // present a single round is all a manual start means.
+                    val keepGoing = if (remaining != null) remaining > 0 else !userPresent
+                    if (!keepGoing) break
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLogger.error(TAG_STREAM, "[group] startGroupChat failed: ${e.message}")
+                setInlineError(e.message ?: "群聊启动失败")
+            } finally {
+                _speakerId.value = null
+                _groupTyping.value = null
+                _groupSpeakerClosing.value = false
+                _groupRoundsRemaining.value = null
+                com.openminis.app.sandbox.SessionPersonaRegistry.set(
+                    realSessionId.ifEmpty { sessionId },
+                    _personaId.value,
+                )
+                if (holdsSlot) SessionConcurrencyManager.releaseSlot(activeSessionId)
+                _isStreaming.value = false
+            }
+        }
+    }
+
+    /** [T-persona-phase2] Last speaker of the previous round, so a shuffle cannot repeat. */
+    private var _groupLastSpeaker: String? = null
+
     /** Display name for a participant key, for error notices. */
     private fun groupNameOf(key: String): String =
         if (key == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) {
@@ -293,9 +382,6 @@ class ChatViewModel(
         } else {
             com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.name
         }
-
-    private fun groupCharacterKeys(): List<String> =
-        _groupParticipants.value.filter { it != com.openminis.app.rooms.RoomLocationStore.USER_KEY }
 
     val isGroupChat: Boolean
         get() = groupCharacterKeys().size > 1 || (_groupParticipants.value.size > 1 && !_groupParticipants.value.contains(com.openminis.app.rooms.RoomLocationStore.USER_KEY))
@@ -401,6 +487,9 @@ class ChatViewModel(
             runCatching { chatRepository.dao.updateSessionPersona(realSessionId.ifEmpty { sessionId }, null) }
         }
         val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
+        // The session character has just spoken (inside send), so the shuffle
+        // for round two must not hand her the first slot again.
+        _groupLastSpeaker = meKey
         val restOfRound = participants.dropWhile { it != meKey }.drop(1)
         try {
             // The session character has already spoken its line before this
@@ -424,7 +513,15 @@ class ChatViewModel(
                 if (!keepGoing) break
                 val isLast = remaining != null && remaining <= 1
                 if (remaining != null) _groupRoundsRemaining.value = remaining - 1
-                val order = participants.shuffled()
+                // Random order, but never the same person twice in a row: with
+                // two characters a plain shuffle hands ~50% of rounds to the
+                // one who just spoke, and the transcript reads as one of them
+                // repeating herself.
+                var order = participants.shuffled()
+                if (order.size > 1 && order.first() == _groupLastSpeaker) {
+                    order = order.drop(1) + order.first()
+                }
+                _groupLastSpeaker = order.lastOrNull()
                 speakAsGroup(order, provider, fallbackProviders, fallbackStrategy, closingLine = isLast)
                 if (isLast) {
                     _groupRoundsRemaining.value = null
@@ -4892,9 +4989,12 @@ class ChatViewModel(
      * so single-chat prompt caching and byte-stability are untouched.
      */
     private fun remapHistoryForSpeaker(history: List<LLMMessage>): List<LLMMessage> {
-        val participants = _groupParticipants.value
-        if (participants.size < 2) return history
-        if (_speakerId.value == null) return history
+        // Group-ness is decided by the membership list, NOT by whether a
+        // speaker override is set: the built-in character speaks with a null
+        // override, so the old `_speakerId == null` early-return made every
+        // one of HER turns skip the remap — the other character's lines
+        // stayed assistant turns and she read them as her own words.
+        if (groupCharacterKeys().size < 2) return history
         val defaultKey = com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME
         val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
 
@@ -9962,16 +10062,21 @@ class ChatViewModel(
                             ?: com.openminis.app.data.model.FallbackStrategy.default
                     }
 
-                    // [T-persona-phase2] Re-read membership at send time: the
-                    // init-time read races a fast first message, and a member
-                    // list edited in another window would otherwise only take
-                    // effect after leaving and re-entering the session.
-                    reloadGroupParticipants()
-
                     // Build full fallback provider list upfront (mirrors iOS triedEntries approach)
                     val fallbackProviders = buildFallbackProviders(provider)
 
                     try {
+                        // [T-persona-phase2] Re-read membership at send time:
+                        // the init-time read races a fast first message, and a
+                        // member list edited elsewhere would otherwise only take
+                        // effect after leaving and re-entering the session.
+                        //
+                        // INSIDE the try on purpose — it is a suspend call, and
+                        // a cancellation landing here used to skip the
+                        // finally { releaseSlot() } below, leaking the session's
+                        // concurrency slot so every later message waited
+                        // forever and nothing ever answered.
+                        reloadGroupParticipants()
                         AppLogger.info(TAG_STREAM, "send runAgentLoop CALL")
                         runAgentLoop(
                             provider = provider,
