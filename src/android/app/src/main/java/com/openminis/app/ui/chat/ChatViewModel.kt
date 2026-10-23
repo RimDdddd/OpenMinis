@@ -5064,7 +5064,59 @@ class ChatViewModel(
      */
     private fun effectiveAgentHistory(): List<LLMMessage> {
         val repaired = dropOrphanedToolParts(effectiveAgentHistoryUncounted())
-        return withSpeakerTurnHint(remapHistoryForSpeaker(repaired))
+        // [T-persona-phase2] Group turn, no tools in play: send the whole
+        // conversation as ONE piece of script and let her finish her own line.
+        //
+        // This is the SillyTavern shape, and the reason for it is the thing the
+        // model itself said out loud: with role-separated turns it worked out
+        // that "two characters are mixed in one model" — because the `user` side
+        // contained a speaker calling herself 妙妙. A script has no roles to
+        // reason about: it is one block of text ending with "…轮到你（米米）：",
+        // and all she has to do is continue it. There is no "which of these
+        // turns am I" to get wrong.
+        //
+        // Once the loop touches a tool the history carries tool_use/tool_result
+        // blocks that only exist in the role form, so those turns fall back to
+        // the structured path automatically.
+        val remapped = remapHistoryForSpeaker(repaired)
+        val scripted = scriptedGroupHistory(remapped)
+        return scripted ?: withSpeakerTurnHint(remapped)
+    }
+
+    /**
+     * [T-persona-phase2] Render the group history as one script block, or null
+     * when the structured form is required (no group turn running, or tool
+     * traffic present).
+     */
+    private fun scriptedGroupHistory(history: List<LLMMessage>): List<LLMMessage>? {
+        if (!groupTurnActive) return null
+        if (groupCharacterKeys().size < 2) return null
+        if (history.any { m ->
+                m.contentParts.any {
+                    it is AgentContentPart.ToolUse || it is AgentContentPart.ToolResult
+                }
+            }
+        ) return null
+
+        val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
+        val meName = groupNameOf(meKey)
+        val script = buildString {
+            append("下面是同一间屋子里的对话记录（只有文字，没有角色标记）：\n\n")
+            history.forEach { m ->
+                if (m.content.isBlank()) return@forEach
+                val who = m.name?.takeIf { it.isNotBlank() } ?: if (m.role == LLMMessage.Role.USER) "川" else meName
+                append(who).append("：").append(m.content.trim()).append("\n")
+            }
+            append("\n现在轮到 ").append(meName).append("。接着上面写她这一句——")
+            append("只写她的动作和台词，不要写别人的，也不要在开头写她的名字。")
+        }
+        return listOf(
+            LLMMessage(
+                role = LLMMessage.Role.USER,
+                content = script,
+                contentParts = listOf(AgentContentPart.Text(script)),
+            ),
+        )
     }
 
     /** [T-persona-phase2] True while a group turn is generating (see speakAsGroup). */
