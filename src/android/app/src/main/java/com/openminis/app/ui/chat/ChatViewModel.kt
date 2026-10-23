@@ -275,8 +275,9 @@ class ChatViewModel(
             append("This is a group conversation in one room. People present: ")
             append(participants.map { nameOf(it) }.joinToString(", "))
             append(".\nYou are ").append(nameOf(meKey)).append(". ")
-            append("Everyone else's lines arrive as assistant messages carrying their name ")
-            append("in the message's `name` field; yours carry no name. Nothing is written in the text itself. ")
+            append("Everyone else speaks to you as user turns carrying that person's name in the ")
+            append("message's `name` field — 川 and 妙妙 alike. Your own words are the assistant turns, ")
+            append("and only yours. Nothing is written in the text itself. ")
             if (userPresent) {
                 append("川's lines arrive as user turns — the `user` role is just the shape of the wire, ")
                 append("it does not make him the audience: everyone in this room is a peer, ")
@@ -5209,12 +5210,23 @@ class ChatViewModel(
             }
             if (hasToolTraffic) return@map msg
 
-            // [T-persona-phase2] The name rides in the message's `name` field,
-            // NOT in the text. Anything written into the content is a format
-            // the model reproduces, and what it reproduced was the other
-            // person's name — "[米米] (站起来…)" spoken by 妙妙. A field it never
-            // sees in the text cannot be copied.
-            msg.copy(name = if (speakerKey == userKey) "川" else nameOf(speakerKey))
+            // [T-persona-phase2] Identity is STRUCTURAL, not inferred.
+            //
+            // `assistant` holds this character's words and nobody else's; every
+            // other voice — 川 included — arrives as a `user` turn carrying that
+            // person's name in the `name` field. The model therefore never has
+            // to work out "which of these turns are mine": there is exactly one
+            // answer, by construction. That inference was the bug: with a peer's
+            // line sitting on the assistant side, the model read it as its own
+            // and answered as her.
+            //
+            // The name stays out of the text on purpose — anything written into
+            // the content is a format the model copies, and what it copied was
+            // the other person's name.
+            msg.copy(
+                role = LLMMessage.Role.USER,
+                name = if (speakerKey == userKey) "川" else nameOf(speakerKey),
+            )
         }
     }
 
