@@ -1366,6 +1366,7 @@
     <string name="chat_menu_clear_chat">Clear Chat</string>
     <string name="chat_menu_open_terminal">Open Terminal</string>
     <string name="chat_menu_rooms">Rooms</string>
+    <string name="sessionlist_rooms">Rooms</string>
     <string name="rooms_title">Rooms</string>
     <string name="rooms_you_are_in">You are in %1$s</string>
     <string name="rooms_tap_hint">Tap a room to walk there.</string>

@@ -71,6 +71,7 @@ import androidx.compose.material.icons.outlined.AddComment
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOff
+import androidx.compose.material.icons.outlined.MeetingRoom
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Book
@@ -515,6 +516,10 @@ fun SessionListScreen(
     onRootfsClick: () -> Unit = {},
     // [T-android-scheduled-tasks-design] Entry to the scheduled-tasks list.
     onScheduledTasksClick: () -> Unit = {},
+    /** [T-rooms] The house: who is standing in which room. Global, not
+     *  per-session — which is why it lives on this toolbar rather than inside
+     *  a chat. */
+    onRoomsClick: () -> Unit = {},
     /**
      * [T-android-tablet-split] The session currently shown in the detail pane,
      * highlighted in the list. Non-null only in two-pane (tablet) mode — in
@@ -886,6 +891,14 @@ fun SessionListScreen(
                             )
                         }
                     } else {
+                        // [T-rooms] Where everyone is. Ahead of the scheduled-tasks
+                        // button: the house is a place, not a task.
+                        IconButton(onClick = onRoomsClick) {
+                            Icon(
+                                Icons.Outlined.MeetingRoom,
+                                contentDescription = stringResource(R.string.sessionlist_rooms),
+                            )
+                        }
                         // [T-android-scheduled-tasks-design] Scheduled-tasks entry,
                         // sits to the left of the Shell button on the home toolbar.
                         // [T-android-scheduled-tasks-full] Badge shows the count of

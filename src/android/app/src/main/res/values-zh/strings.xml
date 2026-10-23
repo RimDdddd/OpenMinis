@@ -1237,6 +1237,7 @@
     <string name="chat_menu_clear_chat">清空对话</string>
     <string name="chat_menu_open_terminal">打开终端</string>
     <string name="chat_menu_rooms">房间</string>
+    <string name="sessionlist_rooms">房间</string>
     <string name="rooms_title">房间</string>
     <string name="rooms_you_are_in">你在 %1$s</string>
     <string name="rooms_tap_hint">点一间房就走过去。</string>

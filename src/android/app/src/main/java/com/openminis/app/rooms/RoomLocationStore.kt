@@ -38,7 +38,8 @@ object RoomLocationStore {
     const val USER_KEY = "user"
 
     private const val REL_PATH = "minis-global/rooms.json"
-    private const val DEFAULT_ROOM = "米米书房"
+    /** Where someone with no home room of their own ends up. */
+    const val DEFAULT_ROOM = "米米书房"
 
     /** What a fresh install shows before the sandbox has ever written the file. */
     private val BUILT_IN_ROOMS = listOf("米米书房", "米米的卧室", "妙妙的房间", "川的卧室", "浴室")
@@ -78,6 +79,49 @@ object RoomLocationStore {
             cachedStamp = stamp
             return loaded
         }
+    }
+
+    /**
+     * Give everyone a starting position the first time the map is opened.
+     *
+     * Without this the file appears only when the user taps a cell, and until
+     * then a fresh install shows an empty grid — every cell vacant while the
+     * prompt already tells the characters they are in [DEFAULT_ROOM]. Seeding
+     * makes the map and the prompt agree from the first launch, and gives the
+     * sandbox-side `cat /var/minis/rooms.json` something to show.
+     *
+     * Writes once and never again: an existing file is returned untouched, so a
+     * user who has moved people around does not get their map reset by opening
+     * the screen.
+     */
+    fun seedIfMissing(context: Context, keys: List<String>): Snapshot {
+        synchronized(this) {
+            if (file(context).exists()) return snapshot(context)
+            val positions = keys.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+                .associateWith { homeRoomFor(it) }
+            val next = Snapshot(BUILT_IN_ROOMS, positions)
+            runCatching { write(context, next) }
+            cached = next
+            cachedStamp = runCatching { file(context).lastModified() }.getOrDefault(0L)
+            return next
+        }
+    }
+
+    /**
+     * Which room is this character's own?
+     *
+     * Not a table: the rooms ARE folders the user named, and the names already
+     * say whose they are ("米米的卧室", "妙妙的房间", "川的卧室"). So the home room
+     * is the first room whose name contains the character's name — the same
+     * rule a person would use reading the list. No match (a room nobody owns,
+     * or a character whose room was renamed) falls back to [DEFAULT_ROOM].
+     */
+    private fun homeRoomFor(key: String): String {
+        val name = if (key == USER_KEY) "川" else SoulStore.cachedMetadataFor(key).value.name
+        if (name.isNotBlank()) {
+            BUILT_IN_ROOMS.firstOrNull { it.contains(name) }?.let { return it }
+        }
+        return DEFAULT_ROOM
     }
 
     /**

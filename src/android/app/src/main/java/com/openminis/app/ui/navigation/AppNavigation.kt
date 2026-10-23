@@ -630,6 +630,7 @@ fun AppNavigation(
                 onEnvVarsClick = { navController.safeNavigate(Routes.ENV_VARS) },
                 onSkillsClick = { navController.safeNavigate(Routes.SKILLS) },
                 onTerminalClick = { navController.safeNavigate(Routes.terminal()) },
+                onRoomsClick = { navController.safeNavigate(Routes.ROOMS) },
                 onMemoryClick = { navController.safeNavigate(Routes.MEMORY) },
                 onAgentsClick = { navController.safeNavigate(Routes.AGENTS) },
                 onAgentToolsClick = { navController.safeNavigate(Routes.AGENT_TOOLS) },

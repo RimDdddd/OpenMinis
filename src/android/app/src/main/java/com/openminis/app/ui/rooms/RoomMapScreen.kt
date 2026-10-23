@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +36,9 @@ import com.openminis.app.R
 import com.openminis.app.agent.SoulStore
 import com.openminis.app.rooms.RoomLocationStore
 import com.openminis.app.ui.settings.SettingsScaffold
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * [T-rooms] One grid of rooms; each cell holds the faces of whoever is standing
@@ -56,6 +60,23 @@ import com.openminis.app.ui.settings.SettingsScaffold
 fun RoomMapScreen(onBack: () -> Unit = {}) {
     val context = LocalContext.current
     var snapshot by remember { mutableStateOf(RoomLocationStore.snapshot(context)) }
+    // Everyone the app knows about, not just whoever the file happens to
+    // mention: a character with no row yet is still standing somewhere, and
+    // leaving her off the map would read as "she does not exist".
+    var known by remember {
+        mutableStateOf(listOf(RoomLocationStore.USER_KEY, com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME))
+    }
+    LaunchedEffect(Unit) {
+        val ids = withContext(Dispatchers.IO) {
+            File(context.filesDir, "minis-global/personas")
+                .listFiles()?.filter { it.isDirectory }?.map { it.name } ?: emptyList()
+        }
+        known = (listOf(RoomLocationStore.USER_KEY) + ids +
+            com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME).distinct()
+        // First open only: puts everyone in their own room so the grid is not
+        // an empty page while the prompt already says where they are.
+        snapshot = withContext(Dispatchers.IO) { RoomLocationStore.seedIfMissing(context, known) }
+    }
     val me = RoomLocationStore.USER_KEY
     val myRoom = snapshot.roomOf(me)
 
@@ -80,9 +101,8 @@ fun RoomMapScreen(onBack: () -> Unit = {}) {
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     pair.forEach { room ->
-                        val people = snapshot.positions
-                            .filterValues { it == room }
-                            .keys
+                        val people = known
+                            .filter { snapshot.roomOf(it) == room }
                             .sorted()
                         Box(Modifier.weight(1f)) {
                             RoomCell(

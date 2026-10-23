@@ -879,6 +879,7 @@ fun ChatSplitScaffoldRoute(
                     navController.safeNavigate(Routes.BACKUP)
                 },
                 onTerminalClick = { navController.safeNavigate(Routes.terminal()) },
+                onRoomsClick = { navController.safeNavigate(Routes.ROOMS) },
                 onRootfsClick = { navController.safeNavigate(Routes.ROOTFS_MANAGEMENT) },
                 onScheduledTasksClick = { navController.safeNavigate(Routes.SCHEDULED_TASKS) },
                 selectedSessionId = selectedSessionId,
