@@ -195,7 +195,11 @@ class ChatViewModel(
 
     /** Replace the participant list and switch the session into/out of group mode. */
     suspend fun setGroupParticipants(personaIds: List<String>) {
-        val sid = activeSessionId ?: return
+        // A draft has no session row yet, so writing membership against the
+        // synthetic id would evaporate. Materialise the session first.
+        val sid = runCatching { ensureSession() }.getOrNull()?.takeIf { it.isNotEmpty() }
+            ?: activeSessionId?.takeIf { it.isNotEmpty() }
+            ?: return
         val dao = sessionPersonaDao ?: return
         runCatching {
             dao.deleteForSession(sid)
@@ -282,6 +286,14 @@ class ChatViewModel(
      * never takes a generated turn and is never introduced to the model as one
      * of the speakers.
      */
+    /** Display name for a participant key, for error notices. */
+    private fun groupNameOf(key: String): String =
+        if (key == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) {
+            com.openminis.app.agent.SoulStore.cachedMetadataFor(null).value.name
+        } else {
+            com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.name
+        }
+
     private fun groupCharacterKeys(): List<String> =
         _groupParticipants.value.filter { it != com.openminis.app.rooms.RoomLocationStore.USER_KEY }
 
@@ -315,15 +327,39 @@ class ChatViewModel(
                     _groupTyping.value = null
                 }
             }
+            val speakerPersona = if (key == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) null else key
             _groupSpeakerClosing.value = closingLine
-            _speakerId.value = if (key == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) null else key
-            AppLogger.info(TAG_STREAM, "[group] turn speaker=${key} closing=$closingLine sid=${sessionId.take(72)}")
-            runAgentLoop(
-                provider = provider,
-                systemPrompt = buildSystemPrompt(),
-                fallbackProviders = fallbackProviders,
-                fallbackStrategy = fallbackStrategy,
+            _speakerId.value = speakerPersona
+            // [T-persona-phase2] The sandbox mounts `/var/minis/memory` per
+            // session, and the mount table is rebuilt on every command — so
+            // publishing the speaker here is what makes a shell run by the
+            // SECOND character see HER SOUL and diary instead of the first
+            // one's. Without it, isolation held everywhere except the one place
+            // a character actually goes looking.
+            com.openminis.app.sandbox.SessionPersonaRegistry.set(
+                realSessionId.ifEmpty { sessionId },
+                speakerPersona,
             )
+            AppLogger.info(TAG_STREAM, "[group] turn speaker=${key} closing=$closingLine sid=${sessionId.take(72)}")
+            try {
+                runAgentLoop(
+                    provider = provider,
+                    systemPrompt = buildSystemPrompt(),
+                    fallbackProviders = fallbackProviders,
+                    fallbackStrategy = fallbackStrategy,
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // One character failing must not swallow the rest of the round:
+                // the user asked two people a question, and a 400 on one of
+                // them used to leave the other silent with no explanation.
+                AppLogger.error(TAG_STREAM, "[group] speaker=$key failed: ${e.javaClass.simpleName}: ${e.message}")
+                appendSystemInfo(
+                    text = "这一轮 ${groupNameOf(key)} 没能开口：${e.message?.take(120) ?: e.javaClass.simpleName}",
+                    iconKind = "error",
+                )
+            }
         }
     }
 
@@ -360,7 +396,7 @@ class ChatViewModel(
         // answer as THAT character when the built-in one's turn comes up.
         if (_personaId.value != null) {
             _personaId.value = null
-            runCatching { chatRepository.dao.updateSessionPersona(realSessionId.ifEmpty { sessionId }, null) }
+            runCatching { chatRepository.dao.updateSessionPersona(sid, null) }
         }
         val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
         val restOfRound = participants.dropWhile { it != meKey }.drop(1)
@@ -399,6 +435,10 @@ class ChatViewModel(
             _speakerId.value = null
             _groupTyping.value = null
             _groupSpeakerClosing.value = false
+            com.openminis.app.sandbox.SessionPersonaRegistry.set(
+                realSessionId.ifEmpty { sessionId },
+                _personaId.value,
+            )
             // A countdown that was interrupted must not survive into the next
             // message, or a single stop leaves the session quietly wrapping up
             // three rounds later for no visible reason.
