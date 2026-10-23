@@ -696,6 +696,46 @@ class BackupImporter(
             report.bytesWritten += file.length()
         }
 
+        // [T-persona-phase2] Packages written before the isolation change put
+        // the default character in `data/memory` only. A build that reads
+        // `personas/__default__/` would then find an empty character: seed her
+        // directory from the legacy copy, but never overwrite what is already
+        // there (a newer package's own personas tree wins).
+        runCatching {
+            val legacy = File(context.filesDir, "minis-global/memory")
+            val personaDest = File(context.filesDir, "minis-global/personas/__default__")
+                .apply { mkdirs() }
+            // Pre-isolation layout, flat in `minis-global/memory`:
+            //   SOUL.md / SOUL.icon.png / LONGTERM.md -> personas/__default__/
+            //   YYYY-MM-DD.md (the diary)             -> personas/__default__/memory/
+            //   GLOBAL.md                             -> stays shared, not copied
+            // Any nested `memory/` subtree is handled the same way, so both the
+            // flat and the nested shapes restore.
+            fun seed(from: File, to: File) {
+                if (!from.isFile || to.exists()) return
+                to.parentFile?.mkdirs()
+                from.copyTo(to, overwrite = true)
+                report.filesWritten += 1
+                report.bytesWritten += from.length()
+            }
+            for (name in listOf("SOUL.md", "SOUL.icon.png", "LONGTERM.md")) {
+                seed(File(legacy, name), File(personaDest, name))
+            }
+            val diaryTo = File(personaDest, "memory").apply { mkdirs() }
+            legacy.listFiles()?.forEach { f ->
+                if (f.isFile && f.name.endsWith(".md") && f.name != "SOUL.md" && f.name != "GLOBAL.md" && f.name != "LONGTERM.md") {
+                    seed(f, File(diaryTo, f.name))
+                }
+            }
+            val nestedDiary = File(legacy, "memory")
+            if (nestedDiary.isDirectory) {
+                for (file in nestedDiary.walkTopDown().filter { it.isFile }) {
+                    val rel = file.relativeTo(nestedDiary).path.replace(File.separatorChar, '/')
+                    seed(file, File(diaryTo, rel))
+                }
+            }
+        }
+
         // [T-persona-phase1] Characters ride along with memory — see the export
         // side. Rows first, so the directory a row names already exists by the
         // time anything lists personas; a row whose directory is missing is

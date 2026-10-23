@@ -425,6 +425,24 @@ class BackupExporter(
                 bytes += file.length()
             }
         }
+        // [T-persona-phase2] A phone still on the pre-isolation layout has the
+        // default character's SOUL / LONGTERM / diary under
+        // `minis-global/memory` and an EMPTY `personas/` tree. Mirroring that
+        // folder into `data/personas/__default__/` here is what makes the
+        // package restorable on a build that reads the new path — otherwise a
+        // restore drops the character's identity into a directory nothing
+        // opens, which is exactly what "my memories did not come back" meant.
+        if (personaFiles == 0 && source.isDirectory) {
+            val legacyDest = File(dataDir, "personas/__default__").apply { mkdirs() }
+            for (file in source.walkTopDown().filter { it.isFile }) {
+                val rel = file.relativeTo(source).path.replace(File.separatorChar, '/')
+                val out = File(legacyDest, rel).apply { parentFile?.mkdirs() }
+                file.copyTo(out, overwrite = true)
+                personaFiles += 1
+                bytes += file.length()
+            }
+        }
+
         val rows = runCatching {
             (context.applicationContext as? com.openminis.app.MinisApp)
                 ?.database?.personaDao()?.getAll()
