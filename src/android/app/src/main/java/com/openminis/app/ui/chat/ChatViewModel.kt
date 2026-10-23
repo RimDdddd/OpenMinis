@@ -317,8 +317,8 @@ class ChatViewModel(
         closingLine: Boolean = false,
     ) {
         val gap = _groupGapSeconds.value
-        for (key in order) {
-            if (key == com.openminis.app.rooms.RoomLocationStore.USER_KEY) continue
+        val speakers = order.filter { it != com.openminis.app.rooms.RoomLocationStore.USER_KEY }
+        for ((index, key) in speakers.withIndex()) {
             if (gap > 0) {
                 _groupTyping.value = GroupTyping(speakerKey = key, totalMs = gap * 1000L)
                 try {
@@ -328,7 +328,9 @@ class ChatViewModel(
                 }
             }
             val speakerPersona = if (key == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) null else key
-            _groupSpeakerClosing.value = closingLine
+            // Only the person who speaks LAST gets told to wrap up — telling
+            // both of them turns the closing round into two farewells.
+            _groupSpeakerClosing.value = closingLine && index == speakers.lastIndex
             _speakerId.value = speakerPersona
             // [T-persona-phase2] The sandbox mounts `/var/minis/memory` per
             // session, and the mount table is rebuilt on every command — so
@@ -9960,6 +9962,12 @@ class ChatViewModel(
                             ?: com.openminis.app.data.model.FallbackStrategy.default
                     }
 
+                    // [T-persona-phase2] Re-read membership at send time: the
+                    // init-time read races a fast first message, and a member
+                    // list edited in another window would otherwise only take
+                    // effect after leaving and re-entering the session.
+                    reloadGroupParticipants()
+
                     // Build full fallback provider list upfront (mirrors iOS triedEntries approach)
                     val fallbackProviders = buildFallbackProviders(provider)
 
@@ -17949,7 +17957,14 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
             val merged = mutableListOf<ChatMessage>()
             for (msg in messages) {
                 val prev = merged.lastOrNull()
-                if (msg.role == "assistant" && prev?.role == "assistant") {
+                // [T-persona-phase2] …and the SAME speaker. Two characters in a
+                // group chat produce two consecutive assistant rows, and folding
+                // them into one bubble merged two people's words under one name
+                // — which is exactly how a group conversation came out labelled
+                // as if only the first character had spoken.
+                if (msg.role == "assistant" && prev?.role == "assistant" &&
+                    msg.speakerId == prev.speakerId
+                ) {
                     // Merge: combine tool blocks, append text, keep the last id.
                     // Deduplicate by block.id — the agent loop may persist the same tool
                     // use in multiple consecutive turns (as it carries tool state across),
@@ -17976,6 +17991,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
                         // an assistant row that gets folded into a later
                         // assistant turn).
                         sourceDbIds = prev.sourceDbIds + msg.sourceDbIds,
+                        speakerId = msg.speakerId ?: prev.speakerId,
                         // [T-error-persist-android] The error sticker is written
                         // to the LAST assistant row of the turn, so the later row
                         // (`msg`) wins; fall back to `prev` if only it carried one.

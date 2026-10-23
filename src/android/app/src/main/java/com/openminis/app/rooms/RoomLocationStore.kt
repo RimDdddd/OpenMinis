@@ -108,6 +108,31 @@ object RoomLocationStore {
     }
 
     /**
+     * [T-rooms] Merge rooms discovered on disk into the map.
+     *
+     * A room IS a folder the user created, so the folder list is the source of
+     * truth and this file is only its cache: adding or renaming a folder in the
+     * file manager must show up on the map without anyone editing json by hand.
+     * Existing order and existing positions are preserved — a room that
+     * disappears from disk is NOT dropped, because a character may still be
+     * standing in it and silently deleting her position is worse than showing a
+     * room whose folder was renamed.
+     */
+    fun syncRooms(context: Context, discovered: List<String>): Snapshot {
+        synchronized(this) {
+            val current = snapshot(context)
+            val merged = (current.rooms + discovered.map { it.trim() }.filter { it.isNotEmpty() })
+                .distinct()
+            if (merged == current.rooms) return current
+            val next = Snapshot(merged, current.positions)
+            runCatching { write(context, next) }
+            cached = next
+            cachedStamp = runCatching { file(context).lastModified() }.getOrDefault(0L)
+            return next
+        }
+    }
+
+    /**
      * Which room is this character's own?
      *
      * Not a table: the rooms ARE folders the user named, and the names already

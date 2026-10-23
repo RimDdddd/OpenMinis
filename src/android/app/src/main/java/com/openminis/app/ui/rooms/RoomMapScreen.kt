@@ -76,6 +76,26 @@ fun RoomMapScreen(onBack: () -> Unit = {}) {
         // First open only: puts everyone in their own room so the grid is not
         // an empty page while the prompt already says where they are.
         snapshot = withContext(Dispatchers.IO) { RoomLocationStore.seedIfMissing(context, known) }
+        // [T-rooms] The folders ARE the rooms: rescan the mounted roots every
+        // time the map opens, so creating or renaming a folder shows up here
+        // without touching any json. Only direct children of a mounted root
+        // count — deeper levels are contents, not rooms.
+        val discovered = withContext(Dispatchers.IO) {
+            val app = context.applicationContext as? com.openminis.app.MinisApp
+            app?.mountedFoldersStore?.entries?.value
+                ?.mapNotNull { it.resolvedHostPath }
+                ?.flatMap { root ->
+                    File(root).listFiles()
+                        ?.filter { it.isDirectory }
+                        ?.map { it.name }
+                        ?: emptyList()
+                }
+                ?.distinct()
+                ?: emptyList()
+        }
+        if (discovered.isNotEmpty()) {
+            snapshot = withContext(Dispatchers.IO) { RoomLocationStore.syncRooms(context, discovered) }
+        }
     }
     val me = RoomLocationStore.USER_KEY
     val myRoom = snapshot.roomOf(me)
