@@ -7533,8 +7533,10 @@ fun ChatScreen(
                     current = viewModel.groupParticipants.collectAsState().value,
                     onDismiss = { showGroupMembersDialog = false },
                     onConfirm = { ids ->
-                        viewModel.setGroupParticipants(ids)
                         showGroupMembersDialog = false
+                        // setGroupParticipants writes the db; the dialog closes
+                        // first so the tap feels instant even on a slow disk.
+                        coroutineScope.launch { viewModel.setGroupParticipants(ids) }
                     },
                 )
             }

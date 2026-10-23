@@ -4803,7 +4803,7 @@ class ChatViewModel(
             if (msg.role == LLMMessage.Role.USER) {
                 msg.asOtherPerson("川：")
             } else {
-                val speakerKey = RoomLocationStore.keyOf(speakerByRow[msg.dbMessageId])
+                val speakerKey = com.openminis.app.rooms.RoomLocationStore.keyOf(speakerByRow[msg.dbMessageId])
                 if (speakerKey == meKey) msg else msg.asOtherPerson(nameOf(speakerKey) + "：")
             }
         }
