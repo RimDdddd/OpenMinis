@@ -27,7 +27,11 @@ object StopSequences {
         current = others
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-            .flatMap { name -> listOf("\n$name：", "\n$name:") }
+            // NO leading newline: the model's habit is to open its reply with
+            // "米米：(…)" on the very first line, where "\n米米：" never matches.
+            // The no-newline form is a superset — it catches that and the
+            // "his line starts on the next paragraph" case alike.
+            .flatMap { name -> listOf("$name：", "$name:") }
             .distinct()
             // Most providers cap `stop` at four; two participants plus 川 is
             // already at the limit, and truncating silently is better here than

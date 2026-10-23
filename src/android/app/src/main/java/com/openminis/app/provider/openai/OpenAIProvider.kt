@@ -2193,6 +2193,9 @@ class OpenAIProvider private constructor(
         // writing somebody else's line (see StopSequences).
         com.openminis.app.provider.StopSequences.current.takeIf { it.isNotEmpty() }?.let { stops ->
             body.put("stop", org.json.JSONArray(stops))
+            // [T-persona-phase2] Logged: a stop list that never reaches the
+            // wire looks exactly like one the model ignored.
+            android.util.Log.i("OpenAIProvider", "[group] stop=" + stops.joinToString("|"))
         }
 
         // [T-android-xai-priority] xAI Priority Processing, driven by the same
@@ -3314,6 +3317,9 @@ class OpenAIProvider private constructor(
         // writing somebody else's line (see StopSequences).
         com.openminis.app.provider.StopSequences.current.takeIf { it.isNotEmpty() }?.let { stops ->
             body.put("stop", org.json.JSONArray(stops))
+            // [T-persona-phase2] Logged: a stop list that never reaches the
+            // wire looks exactly like one the model ignored.
+            android.util.Log.i("OpenAIProvider", "[group] stop=" + stops.joinToString("|"))
         }
         // [T-android-xai-priority] xAI documents service_tier for both text
         // inference endpoints. xAI currently always resolves to the Chat

@@ -260,6 +260,12 @@ class ChatViewModel(
                 com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.name
             }
         val others = participants.filter { it != meKey }.map { nameOf(it) }
+        // [T-persona-phase2] Is 川 actually one of the participants? A room of
+        // two characters with him left out is them talking alone — the prompt
+        // must not keep referring to a man who is not there.
+        val userPresent = _groupParticipants.value.contains(
+            com.openminis.app.rooms.RoomLocationStore.USER_KEY,
+        )
         return buildString {
             // [T-persona-phase2] 川 is a person in the room, not "the user".
             // The transcript still carries his lines as user turns because that
@@ -269,11 +275,18 @@ class ChatViewModel(
             append("This is a group conversation in one room. People present: ")
             append(participants.map { nameOf(it) }.joinToString(", "))
             append(".\nYou are ").append(nameOf(meKey)).append(". ")
-            append("Everyone else's lines arrive as assistant turns carrying their name as a prefix ")
-            append("(妙妙：…); yours are the assistant turns without one. ")
-            append("川's lines arrive as user turns — the `user` role is just the shape of the wire, ")
-            append("it does not make him the audience: everyone in this room is a peer, ")
-            append("yourself included. ")
+            append("Everyone else's lines arrive as assistant turns carrying their name in brackets ")
+            append("([妙妙] …); yours are the assistant turns without one. ")
+            if (userPresent) {
+                append("川's lines arrive as user turns — the `user` role is just the shape of the wire, ")
+                append("it does not make him the audience: everyone in this room is a peer, ")
+                append("yourself included. ")
+            } else {
+                append("川 is NOT in this room right now: nobody here can see or hear him, ")
+                append("and nothing anyone says is addressed to him. This conversation is just ")
+                append(participants.map { nameOf(it) }.joinToString(" and "))
+                append(" talking to each other. ")
+            }
             append("Write exactly one turn of your own — never another participant's lines, ")
             append("never a summary of what they said. ")
             append("If you have nothing to add, answer with a single \"……\" and nothing else. ")
@@ -5072,12 +5085,17 @@ class ChatViewModel(
         val me = groupNameOf(meKey)
         val others = groupCharacterKeys().filter { it != meKey }.map { groupNameOf(it) }
         val hint = buildString {
+            val userPresentHere = _groupParticipants.value.contains(
+                com.openminis.app.rooms.RoomLocationStore.USER_KEY,
+            )
             append("（说明：这是同一个房间里的对话，在场的是 ")
-            append((others + "川").joinToString("、"))
+            append((if (userPresentHere) others + "川" else others).joinToString("、"))
             append("。现在轮到你说话，只写 ").append(me).append(" 这一句；")
             append("用你自己的口吻，别接着上一条别人的自我介绍或独白往下讲。")
             append("对谁说、要不要说给所有人听，你自己判断——")
-            append("每个人在这儿都是同伴。不要替别人写，也不要在开头写自己的名字。）")
+            append("每个人在这儿都是同伴。不要替别人写，也不要在开头写自己的名字。")
+            if (!userPresentHere) append("川不在场，别对着他说话。")
+            append("）")
         }
         return history + LLMMessage(
             role = LLMMessage.Role.USER,
@@ -5164,7 +5182,9 @@ class ChatViewModel(
             val hasToolTraffic = msg.contentParts.any {
                 it is AgentContentPart.ToolUse || it is AgentContentPart.ToolResult
             }
-            if (hasToolTraffic) msg else msg.withNamePrefix(nameOf(speakerKey) + "：")
+            // Bracketed, not "妙妙：…": a colon form is exactly the shell the
+            // model copies when it starts writing somebody else's line.
+            if (hasToolTraffic) msg else msg.withNamePrefix("[" + nameOf(speakerKey) + "] ")
         }
     }
 
@@ -10194,6 +10214,17 @@ class ChatViewModel(
                         // concurrency slot so every later message waited
                         // forever and nothing ever answered.
                         reloadGroupParticipants()
+                        // [T-persona-phase2] Speaking in a room means being in
+                        // it: a character had to be told "he is here now" by
+                        // hand, and until then the two of them kept talking as
+                        // if the room were empty.
+                        if (groupCharacterKeys().size > 1 &&
+                            !_groupParticipants.value.contains(com.openminis.app.rooms.RoomLocationStore.USER_KEY)
+                        ) {
+                            setGroupParticipants(
+                                _groupParticipants.value + com.openminis.app.rooms.RoomLocationStore.USER_KEY,
+                            )
+                        }
                         // [T-persona-phase2] The opening line of a group turn
                         // gets the same stop list as the rest of the round, so
                         // the first speaker cannot write her neighbour's part.
@@ -10203,10 +10234,33 @@ class ChatViewModel(
                                 groupCharacterKeys().filter { it != meKeyNow }.map { groupNameOf(it) } + "川",
                             )
                         }
+                        // [T-persona-phase2] If the message NAMED someone, the
+                        // named character answers first — calling 妙妙 and having
+                        // 米米 answer is the one thing a room must not do. The
+                        // prompt has to be rebuilt because it carries the
+                        // speaker's identity, SOUL and diary.
+                        var turnPrompt = systemPrompt
+                        if (groupCharacterKeys().size > 1) {
+                            val called = groupCharacterKeys().firstOrNull { key ->
+                                val name = groupNameOf(key)
+                                name.isNotEmpty() && text.contains(name)
+                            }
+                            if (called != null) {
+                                val calledPersona =
+                                    if (called == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) null else called
+                                _speakerId.value = calledPersona
+                                com.openminis.app.sandbox.SessionPersonaRegistry.set(
+                                    realSessionId.ifEmpty { sessionId },
+                                    calledPersona,
+                                )
+                                turnPrompt = buildSystemPrompt()
+                                AppLogger.info(TAG_STREAM, "[group] addressed speaker=${called} answers first")
+                            }
+                        }
                         AppLogger.info(TAG_STREAM, "send runAgentLoop CALL")
                         runAgentLoop(
                             provider = provider,
-                            systemPrompt = systemPrompt,
+                            systemPrompt = turnPrompt,
                             fallbackProviders = fallbackProviders,
                             fallbackStrategy = activeFallbackStrategy,
                             prefill = prefill,
@@ -10266,6 +10320,10 @@ class ChatViewModel(
                 AppLogger.info(TAG_STREAM, "send streamJob EXIT")
             }
             } finally {
+                // [T-persona-phase2] A speaker chosen for the opening line must
+                // not survive the turn, or the next message answers as her.
+                _speakerId.value = null
+                com.openminis.app.provider.StopSequences.clear()
                 if (!streamLaunched) {
                     AppLogger.info(TAG_STREAM, "send _isStreaming=false (setup aborted)")
                     _isStreaming.value = false
@@ -15722,6 +15780,30 @@ class ChatViewModel(
      * update ([T-android-session-last-message-live-tool-call]) so both produce
      * an identical payload that [ChatRepository.extractTextPreview] understands.
      */
+    /**
+     * [T-persona-phase2] Cut a reply at the first point where it starts writing
+     * another participant's line ("米米：…" / "米米:…"), and at 川's.
+     *
+     * No-op outside a group turn, so single chats are byte-identical to before.
+     */
+    private fun truncateForeignSpeech(text: String): String {
+        if (text.isEmpty()) return text
+        if (groupCharacterKeys().size < 2) return text
+        val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
+        val others = groupCharacterKeys().filter { it != meKey }.map { groupNameOf(it) } + "川"
+        var cut = text.length
+        for (name in others) {
+            if (name.isBlank()) continue
+            for (sep in listOf("：", ":")) {
+                val idx = text.indexOf(name + sep)
+                if (idx in 0 until cut) cut = idx
+            }
+        }
+        if (cut == text.length) return text
+        AppLogger.info(TAG_STREAM, "[group] trimmed foreign speech at char $cut")
+        return text.substring(0, cut).trimEnd()
+    }
+
     private fun buildAssistantPartsJson(
         parts: List<AgentContentPart>,
         toolBlockMeta: Map<String, AssistantBlock>,
@@ -15731,7 +15813,11 @@ class ChatViewModel(
             if (index > 0) append(",")
             when (part) {
                 is AgentContentPart.Text -> {
-                    append("""{"type":"text","value":${escapeJson(part.text)}}""")
+                    // [T-persona-phase2] Last line of defence for a group turn:
+                    // if she wrote somebody else's line anyway (the model's
+                    // role-play instinct — stopping strings catch most, not
+                    // all), cut the text where that line starts.
+                    append("""{"type":"text","value":${escapeJson(truncateForeignSpeech(part.text))}}""")
                 }
                 is AgentContentPart.ToolUse -> {
                     // Skip tool_use with blank name — upstream bug guard.
@@ -16228,8 +16314,14 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
                 val roomSnap = com.openminis.app.rooms.RoomLocationStore.snapshot(context)
                 val myKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
                 val myRoom = roomSnap.roomOf(myKey)
+                // [T-persona-phase2] In a two-character room, 川's position is
+                // not shown: "川 is in 川的卧室" reads as "he is around", and a
+                // character who thinks he is around keeps talking to him.
+                val hideUser = groupCharacterKeys().size > 1 &&
+                    !_groupParticipants.value.contains(com.openminis.app.rooms.RoomLocationStore.USER_KEY)
                 val others = roomSnap.positions.keys
                     .filter { it != myKey }
+                    .filter { !(hideUser && it == com.openminis.app.rooms.RoomLocationStore.USER_KEY) }
                     .sorted()
                     .joinToString(" ") { k ->
                         val who = if (k == com.openminis.app.rooms.RoomLocationStore.USER_KEY) {
@@ -16243,6 +16335,20 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
                 append("- Rooms: ").append(roomSnap.rooms.joinToString(" / ")).append("\n")
                 append("- You are in ").append(myRoom).append(".")
                 if (others.isNotEmpty()) append(" ").append(others)
+                // [T-persona-phase2] Being in the same room is not the same as
+                // being able to hear him. Say which it is: a man calling from
+                // the bedroom is heard, not seen, and a character who reads
+                // "he is in 川的卧室" as "he is here" answers a room he is not in.
+                val userRoom = roomSnap.positions[com.openminis.app.rooms.RoomLocationStore.USER_KEY]
+                if (!hideUser && !userRoom.isNullOrBlank()) {
+                    if (userRoom == myRoom) {
+                        append(" 川 is in this room with you.")
+                    } else {
+                        append(" 川 is in ").append(userRoom)
+                        append(" — a different room. You can hear him, but he is not in front of you; ")
+                        append("anything you say to him carries across the wall.")
+                    }
+                }
                 append(" Position is state: move_room only when you actually go somewhere.\n")
             }
         }
