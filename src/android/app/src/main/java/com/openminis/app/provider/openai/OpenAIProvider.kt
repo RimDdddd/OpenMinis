@@ -2189,6 +2189,11 @@ class OpenAIProvider private constructor(
             body.put("max_completion_tokens", maxTokens)
         }
         body.put("stream", stream)
+        // [T-persona-phase2] Group turn: stop the moment this character starts
+        // writing somebody else's line (see StopSequences).
+        com.openminis.app.provider.StopSequences.current.takeIf { it.isNotEmpty() }?.let { stops ->
+            body.put("stop", org.json.JSONArray(stops))
+        }
 
         // [T-android-xai-priority] xAI Priority Processing, driven by the same
         // app-level Fast Mode toggle as Codex (FastModePrefs), read here at
@@ -3305,6 +3310,11 @@ class OpenAIProvider private constructor(
         val body = JSONObject()
         body.put("model", model.id)
         body.put("stream", stream)
+        // [T-persona-phase2] Group turn: stop the moment this character starts
+        // writing somebody else's line (see StopSequences).
+        com.openminis.app.provider.StopSequences.current.takeIf { it.isNotEmpty() }?.let { stops ->
+            body.put("stop", org.json.JSONArray(stops))
+        }
         // [T-android-xai-priority] xAI documents service_tier for both text
         // inference endpoints. xAI currently always resolves to the Chat
         // Completions path (forceChatCompletions), so this is belt-and-braces

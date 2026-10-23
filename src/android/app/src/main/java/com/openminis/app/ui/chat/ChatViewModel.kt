@@ -498,6 +498,11 @@ class ChatViewModel(
                 speakerPersona,
             )
             AppLogger.info(TAG_STREAM, "[group] turn speaker=${key} closing=$closingLine sid=${sessionId.take(72)}")
+            // [T-persona-phase2] Stop the decode the moment she starts writing
+            // somebody else's line — SillyTavern's group stopping strings.
+            com.openminis.app.provider.StopSequences.forGroup(
+                groupCharacterKeys().filter { it != key }.map { groupNameOf(it) } + "川",
+            )
             try {
                 runAgentLoop(
                     provider = provider,
@@ -516,6 +521,10 @@ class ChatViewModel(
                     text = "这一轮 ${groupNameOf(key)} 没能开口：${e.message?.take(120) ?: e.javaClass.simpleName}",
                     iconKind = "error",
                 )
+            } finally {
+                // Never let a stop list outlive the turn that asked for it: the
+                // next request in this session might be an ordinary chat.
+                com.openminis.app.provider.StopSequences.clear()
             }
         }
     }
@@ -597,6 +606,7 @@ class ChatViewModel(
             // Reset even on cancel/error: a stale speaker would make the NEXT
             // user message answer as the wrong character.
             groupTurnActive = false
+            com.openminis.app.provider.StopSequences.clear()
             _speakerId.value = null
             _groupTyping.value = null
             _groupSpeakerClosing.value = false
@@ -10184,6 +10194,15 @@ class ChatViewModel(
                         // concurrency slot so every later message waited
                         // forever and nothing ever answered.
                         reloadGroupParticipants()
+                        // [T-persona-phase2] The opening line of a group turn
+                        // gets the same stop list as the rest of the round, so
+                        // the first speaker cannot write her neighbour's part.
+                        if (groupCharacterKeys().size > 1) {
+                            val meKeyNow = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
+                            com.openminis.app.provider.StopSequences.forGroup(
+                                groupCharacterKeys().filter { it != meKeyNow }.map { groupNameOf(it) } + "川",
+                            )
+                        }
                         AppLogger.info(TAG_STREAM, "send runAgentLoop CALL")
                         runAgentLoop(
                             provider = provider,
