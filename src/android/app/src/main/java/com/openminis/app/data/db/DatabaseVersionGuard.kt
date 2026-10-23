@@ -50,7 +50,14 @@ object DatabaseVersionGuard {
      * agree, so they cannot drift apart silently — a stale copy here would
      * either disable the guard or trip it on every launch.
      */
-    const val CODE_DB_VERSION = 15
+    // [T-persona-phase2] Bumped in lockstep with AppDatabase's @Database
+    // version (15 → 16, the session_personas table). Forgetting this half is
+    // not a compile error and CI does not run the unit test that catches it:
+    // the app then believes it only understands 15, Room migrates the file to
+    // 16 anyway, and the NEXT launch is refused by this very guard with
+    // "your data is from a newer version" — on a build that created that data
+    // itself. Both numbers move together, always.
+    const val CODE_DB_VERSION = 16
 
     /** Filename must match the one passed to `Room.databaseBuilder`. */
     private const val DB_NAME = "minis.db"
