@@ -764,7 +764,12 @@ internal fun buildFlatChatItems(
         val prevNonSystem = (idx - 1 downTo 0).asSequence()
             .map { messages[it] }
             .firstOrNull { it.role != "system" && !com.openminis.app.agent.jobs.AgentCallback.isCallbackText(it.content) }
-        val isResumeContinuation = prevNonSystem?.role == "assistant"
+        // [T-persona-phase2] "…and it is the SAME speaker". Resume continuity
+        // (one turn split by a cancel) is a continuation; a group chat's next
+        // character is a new speaker and needs her own header, even though the
+        // previous row is also an assistant message.
+        val isResumeContinuation = prevNonSystem?.role == "assistant" &&
+            prevNonSystem.speakerId == message.speakerId
         if (!isSystem && !isResumeContinuation) {
             out.add(dedupe(FlatChatItem.AssistantHeader(message.id, message.speakerId)))
         }

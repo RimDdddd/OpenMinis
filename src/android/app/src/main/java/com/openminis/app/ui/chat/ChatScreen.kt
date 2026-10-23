@@ -142,6 +142,7 @@ import androidx.compose.material3.ripple
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Switch
+import com.openminis.app.rooms.RoomLocationStore
 import com.openminis.app.ui.settings.SettingsSwitch
 import com.openminis.app.BuildConfig
 import com.openminis.app.R
@@ -192,6 +193,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -3340,6 +3343,20 @@ fun ChatScreen(
                                 },
                                 leadingIcon = {
                                     MenuItemIcon(Icons.Outlined.MeetingRoom)
+                                },
+                            )
+                            // [T-persona-phase2] "Wrap up in three rounds": arm a
+                            // countdown; the sixth line closes the conversation.
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_menu_group_closing)) },
+                                onClick = {
+                                    showChatMenu = false
+                                    viewModel.armGroupClosing(
+                                        if (viewModel.groupRoundsRemaining.value == null) 3 else null,
+                                    )
+                                },
+                                leadingIcon = {
+                                    MenuItemIcon(Icons.Outlined.Timer)
                                 },
                             )
                             // [T-persona-phase2] Who takes part in this room.
@@ -7531,6 +7548,8 @@ fun ChatScreen(
             if (showGroupMembersDialog) {
                 GroupMembersDialog(
                     current = viewModel.groupParticipants.collectAsState().value,
+                    gap = viewModel.groupGapSeconds.collectAsState().value,
+                    onGapChange = { viewModel.setGroupGapSeconds(it) },
                     onDismiss = { showGroupMembersDialog = false },
                     onConfirm = { ids ->
                         showGroupMembersDialog = false
@@ -8188,6 +8207,8 @@ private fun GroupTypingBar(typing: ChatViewModel.GroupTyping) {
 @Composable
 private fun GroupMembersDialog(
     current: List<String>,
+    gap: Int,
+    onGapChange: (Int) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (List<String>) -> Unit,
 ) {
@@ -8197,6 +8218,9 @@ private fun GroupMembersDialog(
         val app = context.applicationContext as? com.openminis.app.MinisApp
         val rows = runCatching { app?.database?.personaDao()?.getAll() }.getOrNull().orEmpty()
         people = buildList {
+            // 川 is a member like any other: unchecking him is what turns a
+            // two-character conversation into the two of them talking alone.
+            add(RoomLocationStore.USER_KEY to "川")
             add(
                 com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME to
                     com.openminis.app.agent.SoulStore.cachedMetadataFor(null).value.name,
@@ -8236,6 +8260,22 @@ private fun GroupMembersDialog(
                             },
                         )
                         Text(name, fontSize = 14.sp)
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    "两人之间隔 ${gap} 秒",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(3, 8, 15, 30, 60, 120).forEach { sec ->
+                        FilterChip(
+                            selected = gap == sec,
+                            onClick = { onGapChange(sec) },
+                            label = { Text("${sec}s", fontSize = 11.sp) },
+                        )
                     }
                 }
             }
