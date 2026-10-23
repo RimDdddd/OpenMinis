@@ -1146,6 +1146,7 @@ fun SessionListScreen(
                                 ) {
                                 SessionItemContent(
                                     session = session,
+                                    groupMembersBySession = groupMembersBySession,
                                     isSelecting = isSelecting,
                                     selectedIds = selectedIds,
                                     onSessionClick = onSessionClickGuarded,
@@ -2091,6 +2092,8 @@ private fun SessionItemContent(
      * "更换分组". The caller resolves membership the same way the list does.
      */
     isFiled: Boolean,
+    /** [T-persona-phase2] sessionId -> participant keys, for the row's name badge. */
+    groupMembersBySession: Map<String, List<String>> = emptyMap(),
     isRegenerating: Boolean = false,
     searchQuery: String = "",
     searchSnippet: String? = null,
@@ -2111,6 +2114,7 @@ private fun SessionItemContent(
         val isSelected = session.id in selectedIds
         SessionRow(
             session = session,
+            groupMembersBySession = groupMembersBySession,
             onClick = { onToggleSelect(session.id) },
             onLongClick = null,
             searchQuery = searchQuery,
@@ -2149,6 +2153,7 @@ private fun SessionItemContent(
         ) {
             SessionRow(
                 session = session,
+                groupMembersBySession = groupMembersBySession,
                 onClick = { onSessionClick(session.id) },
                 searchQuery = searchQuery,
                 searchSnippet = searchSnippet,
@@ -2817,6 +2822,8 @@ private fun SessionRow(
      * once the two-pane list started tinting the selected row.
      */
     isFolderMember: Boolean = false,
+    /** [T-persona-phase2] sessionId -> participant keys, for the row's name badge. */
+    groupMembersBySession: Map<String, List<String>> = emptyMap(),
 ) {
     val style = remember(session.category) { categoryStyle(session.category) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
