@@ -721,6 +721,13 @@ class BackupImporter(
             for (name in listOf("SOUL.md", "SOUL.icon.png", "LONGTERM.md")) {
                 seed(File(legacy, name), File(personaDest, name))
             }
+            // GLOBAL.md used to sit in the same folder as the diary; it lives
+            // one level up now and is shared by every character. Restoring it
+            // only into `memory/` leaves the house rules unreadable.
+            seed(
+                File(legacy, "GLOBAL.md"),
+                File(context.filesDir, "minis-global/GLOBAL.md"),
+            )
             val diaryTo = File(personaDest, "memory").apply { mkdirs() }
             legacy.listFiles()?.forEach { f ->
                 if (f.isFile && f.name.endsWith(".md") && f.name != "SOUL.md" && f.name != "GLOBAL.md" && f.name != "LONGTERM.md") {
