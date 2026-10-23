@@ -29,6 +29,10 @@ interface SessionPersonaDao {
     @Query("DELETE FROM session_personas WHERE session_id = :sessionId")
     suspend fun deleteForSession(sessionId: String)
 
+    /** [T-persona-phase2] Every row, for backup export. */
+    @Query("SELECT * FROM session_personas")
+    suspend fun getAll(): List<SessionPersonaEntity>
+
     @Query("SELECT COUNT(*) FROM session_personas WHERE session_id = :sessionId")
     suspend fun countForSession(sessionId: String): Int
 }

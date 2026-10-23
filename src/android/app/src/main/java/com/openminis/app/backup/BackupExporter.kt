@@ -442,7 +442,38 @@ class BackupExporter(
             }
             File(dataDir, "personas.json").writeText(arr.toString())
         }
-        return BackupManifest.CategoryStat(entries + personaFiles, bytes, encrypted = false)
+
+        // [T-persona-phase2] Group membership and the room map ride along with
+        // memory for the same reason the personas rows do: without them a
+        // restore hands back three characters who no longer know they were ever
+        // in a room together, standing in their default rooms.
+        var groupBytes = 0L
+        runCatching {
+            val groups = (context.applicationContext as? com.openminis.app.MinisApp)
+                ?.database?.sessionPersonaDao()?.getAll().orEmpty()
+            if (groups.isNotEmpty()) {
+                val arr = org.json.JSONArray()
+                groups.forEach { g ->
+                    arr.put(org.json.JSONObject().apply {
+                        put("session_id", g.sessionId)
+                        put("persona_id", g.personaId)
+                        put("sort_order", g.sortOrder)
+                    })
+                }
+                val f = File(dataDir, "session_personas.json")
+                f.writeText(arr.toString())
+                groupBytes += f.length()
+            }
+        }
+        runCatching {
+            val rooms = File(context.filesDir, "minis-global/rooms.json")
+            if (rooms.isFile) {
+                val out = File(dataDir, "rooms.json")
+                rooms.copyTo(out, overwrite = true)
+                groupBytes += out.length()
+            }
+        }
+        return BackupManifest.CategoryStat(entries + personaFiles, bytes + groupBytes, encrypted = false)
     }
 
     /**

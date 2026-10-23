@@ -719,6 +719,43 @@ class BackupImporter(
                 report.bytesWritten += file.length()
             }
         }
+        // [T-persona-phase2] Group membership + room map, written after the
+        // persona rows above (a membership row pointing at a character that is
+        // not there yet would render as an empty seat).
+        val groupsIndex = File(root, "data/session_personas.json")
+        if (groupsIndex.isFile) {
+            runCatching {
+                val arr = org.json.JSONArray(groupsIndex.readText())
+                val dao = db.sessionPersonaDao()
+                val rows = ArrayList<com.openminis.app.data.db.SessionPersonaEntity>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val sid = o.optString("session_id", "").takeIf { it.isNotEmpty() } ?: continue
+                    val pid = o.optString("persona_id", "").takeIf { it.isNotEmpty() } ?: continue
+                    rows.add(
+                        com.openminis.app.data.db.SessionPersonaEntity(
+                            sessionId = sid,
+                            personaId = pid,
+                            sortOrder = o.optInt("sort_order", 0),
+                        ),
+                    )
+                }
+                if (rows.isNotEmpty()) dao.insertAll(rows)
+                report.filesWritten += 1
+                report.bytesWritten += groupsIndex.length()
+            }
+        }
+        val roomsBackup = File(root, "data/rooms.json")
+        if (roomsBackup.isFile) {
+            runCatching {
+                val dest = File(context.filesDir, "minis-global/rooms.json")
+                dest.parentFile?.mkdirs()
+                roomsBackup.copyTo(dest, overwrite = true)
+                report.filesWritten += 1
+                report.bytesWritten += roomsBackup.length()
+            }
+        }
+
         val personasIndex = File(root, "data/personas.json")
         if (personasIndex.isFile) {
             runCatching {
