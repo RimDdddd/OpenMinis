@@ -428,12 +428,16 @@ class ChatViewModel(
             }
         }
         val rest = participants.filter { it !in mentioned }.shuffled()
-        // [T-persona-phase2] No more "the previous speaker is skipped": someone
-        // adding one more line after their own is the most human thing in a
-        // chat. Who spoke is no longer ambiguous — every line carries its
-        // speaker's name and a header, so two turns by one person still read as
-        // two turns by one person.
-        return mentioned + rest
+        // [T-persona-phase2] Consecutive turns are cancelled: the model reads
+        // its own last line as "the thing addressed to me" and answers it, so a
+        // second turn in a row comes out as confusion about who is talking.
+        // The previous speaker is pushed to the BACK of the order, unless the
+        // user named her — being called out still beats the rule.
+        val order = mentioned + rest
+        if (mentioned.isEmpty() && order.size > 1 && order.first() == _groupLastSpeaker) {
+            return order.drop(1) + order.first()
+        }
+        return order
     }
 
     /** [T-persona-phase2] Last speaker of the previous round, so a shuffle cannot repeat. */
@@ -487,7 +491,11 @@ class ChatViewModel(
             // Each character has her own rate (SOUL `talkativeness`); the last
             // speaker always speaks so a round never ends in silence.
             val skipChance = (1f - talkativenessOf(key)).coerceIn(0.05f, 0.9f)
-            if (sparse && index < speakers.lastIndex && kotlin.random.Random.nextFloat() < skipChance) {
+            // With only two people a skip would hand the round to whoever spoke
+            // last, which is exactly the consecutive turn being cancelled.
+            if (sparse && speakers.size > 2 && index < speakers.lastIndex &&
+                kotlin.random.Random.nextFloat() < skipChance
+            ) {
                 AppLogger.info(TAG_STREAM, "[group] speaker=$key stays quiet this round")
                 continue
             }
