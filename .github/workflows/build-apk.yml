@@ -47,7 +47,7 @@ jobs:
           # real one.
           cache-dependency-path: deps/rclone-mobile/go.sum
 
-      - name: Install Android SDK packages (platform 36 / NDK r28 / CMake)
+      - name: Install Android SDK packages (platform 36 / NDK r27 + r28 / CMake)
         run: |
           SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           echo "SDK=$SDK"
@@ -56,6 +56,7 @@ jobs:
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "ndk;28.0.12433566" \
+            "ndk;27.0.12077973" \
             "cmake;3.22.1"
           echo "ANDROID_NDK_HOME=$SDK/ndk/28.0.12433566" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$SDK/ndk/28.0.12433566" >> "$GITHUB_ENV"
