@@ -36,7 +36,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          # [CI] golang.org/x/mobile (gomobile) moved to "requires go >= 1.26.0"
+          # upstream, and the runner sets GOTOOLCHAIN=local — so a 1.25 toolchain
+          # refuses to install it and the rclone AAR step dies before Gradle even
+          # starts. Pin a toolchain new enough to satisfy it.
+          go-version: '1.26'
           # [CI] The Go module lives under deps/rclone-mobile, not the repo
           # root, so setup-go's default "look for go.sum here" found nothing
           # and every build re-downloaded the module cache. Point it at the
