@@ -659,20 +659,11 @@ fun ChatScreen(
     // exactly as before.
     val groupTyping by viewModel.groupTyping.collectAsState()
     var showGroupMembersDialog by remember { mutableStateOf(false) }
+    // [T-persona-phase2] Deliberately NOT auto-starting on open: looking at a
+    // conversation must not cost a round of tokens. A group 川 is not part of
+    // starts from the ⋮ menu ("让他们聊"), and the same entry resumes it after
+    // a stop.
     val groupParticipants by viewModel.groupParticipants.collectAsState()
-    // [T-persona-phase2] A group 川 is not part of has nobody to prompt it, so
-    // opening the session starts the first round. Once per opening — a
-    // recomposition must not start a second one.
-    var autoStartedGroup by remember(sessionId) { mutableStateOf(false) }
-    LaunchedEffect(groupParticipants) {
-        if (!autoStartedGroup &&
-            groupParticipants.size > 1 &&
-            !groupParticipants.contains(RoomLocationStore.USER_KEY)
-        ) {
-            autoStartedGroup = true
-            viewModel.startGroupChat()
-        }
-    }
     val error by viewModel.error.collectAsState()
     val modelName by viewModel.modelName.collectAsState()
     val sessionTitle by viewModel.sessionTitle.collectAsState()
