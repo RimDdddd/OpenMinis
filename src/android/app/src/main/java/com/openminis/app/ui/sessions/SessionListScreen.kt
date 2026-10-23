@@ -610,6 +610,24 @@ fun SessionListScreen(
     var showPersonaPicker by remember { mutableStateOf(false) }
     var personaPickerList by remember { mutableStateOf<List<PersonaEntity>>(emptyList()) }
 
+    // [T-persona-phase2] Which sessions are group chats, and who is in them.
+    // Read once per list size: a row badge must not fire its own db query (a
+    // hundred-row list would be a hundred queries per recomposition).
+    var groupMembersBySession by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
+    // Re-read when the list changes size (new chat, deleted chat) so a session
+    // that just became a group shows its badge without a restart.
+    LaunchedEffect(sessions.size, sessions.map { it.id }.hashCode()) {
+        groupMembersBySession = withContext(Dispatchers.IO) {
+            val empty: Map<String, List<String>> = emptyMap()
+            runCatching {
+                (context.applicationContext as MinisApp).database.sessionPersonaDao()
+                    .getAll()
+                    .groupBy { it.sessionId }
+                    .mapValues { entry -> entry.value.sortedBy { it.sortOrder }.map { it.personaId } }
+            }.getOrDefault(empty)
+        }
+    }
+
     // [T-persona-phase1] Keep the row badges fed. Cheap (a few rows) and only
     // on entry; the Soul screen refreshes it after a create/rename/delete.
     LaunchedEffect(Unit) {
@@ -3061,7 +3079,37 @@ private fun SessionRow(
             // shown for a non-default one: every pre-persona session has
             // persona_id = NULL, and a badge on all of them would be noise.
             val personaNames by com.openminis.app.data.PersonaCache.byId.collectAsState()
-            val speakerLabel = session.personaId?.let { personaNames[it]?.name }?.takeIf { it.isNotBlank() }
+            // [T-persona-phase2] Three cases, not one:
+            //   group chat  -> a group of characters, named as a group
+            //   single chat -> the character it is bound to
+            //   default character (persona_id = NULL) -> HER name
+            // The last one used to render nothing at all, so 米米's chats were
+            // the only ones in the list with no label.
+            val defaultPersonaName by com.openminis.app.agent.SoulStore
+                .cachedMetadataFor(null).collectAsState()
+            // [T-persona-phase2] Just the people in the conversation — no
+            // "group chat" vs "private chat" distinction, and 川 is one of the
+            // people rather than the implicit owner of every row. A group of
+            // three reads "川·米米·妙妙"; a one-to-one reads "川·妙妙".
+            val members = groupMembersBySession[session.id]
+            val speakers = if (!members.isNullOrEmpty() && members.size > 1) {
+                listOf(com.openminis.app.rooms.RoomLocationStore.USER_KEY) + members
+            } else {
+                listOf(com.openminis.app.rooms.RoomLocationStore.USER_KEY, session.personaId ?: "")
+            }
+            val speakerLabel = speakers
+                .map { id ->
+                    when {
+                        id == com.openminis.app.rooms.RoomLocationStore.USER_KEY -> "川"
+                        id.isBlank() || id == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME ->
+                            defaultPersonaName.name
+                        else -> personaNames[id]?.name.orEmpty()
+                    }
+                }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString("·")
+                .takeIf { it.isNotBlank() }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (searchQuery.isNotBlank()) {
                     Text(
