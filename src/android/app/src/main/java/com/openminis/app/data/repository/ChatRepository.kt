@@ -544,6 +544,9 @@ class ChatRepository(internal val dao: ChatDao) {
         tokenUsage: String? = null,
         reasoningContent: String? = null,
         modelSnapshot: ModelAttributionSnapshot? = null,
+        // [T-persona-phase2] Which character spoke this assistant turn. Null
+        // for user rows and for single-chat turns (the session's own persona).
+        speakerId: String? = null,
     ): MessageEntity {
         val sortOrder = dao.nextSortOrder(sessionId)
         val now = System.currentTimeMillis()
@@ -571,6 +574,7 @@ class ChatRepository(internal val dao: ChatDao) {
             modelDisplayName = modelSnapshot?.displayName,
             providerType = modelSnapshot?.providerTypeRaw,
             providerInstanceId = modelSnapshot?.providerInstanceId,
+            speakerId = speakerId,
         )
         dao.insertMessage(message)
         // [T-android-preview-flicker-toolresult] Only overwrite the preview

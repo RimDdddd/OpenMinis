@@ -14,6 +14,8 @@ import com.openminis.app.agent.ToolLoopDetector
 import com.openminis.app.browser.BrowserActionInput
 import com.openminis.app.browser.BrowserTabPool
 import com.openminis.app.data.db.MessageEntity
+import com.openminis.app.data.db.SessionPersonaDao
+import com.openminis.app.data.db.SessionPersonaEntity
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.Delete
@@ -152,6 +154,181 @@ class ChatViewModel(
      * the assistant header has to repaint when that happens.
      */
     val personaIdFlow: kotlinx.coroutines.flow.StateFlow<String?> = _personaId.asStateFlow()
+
+    /**
+     * [T-persona-phase2] Who is speaking RIGHT NOW in a group turn.
+     *
+     * Null means "the session's own persona" — the single-chat case, and also
+     * the resting state between group turns. Everything that used to read
+     * [personaId] to mean "who am I" reads [effectivePersonaId] instead, so a
+     * group turn can hand the turn to another character without rewriting the
+     * session's own binding.
+     */
+    private val _speakerId = MutableStateFlow<String?>(null)
+
+    /** The character this turn belongs to: the speaker if one is set, else the session's. */
+    private fun effectivePersonaId(): String? = _speakerId.value ?: _personaId.value
+
+    /**
+     * [T-persona-phase2] Who takes part in this session's group turn, in
+     * speaking order, using `__default__` for the built-in character.
+     *
+     * Empty = single chat. Loaded from the db on session load and refreshed
+     * whenever the participant list is edited; the send path reads the cached
+     * copy rather than hitting Room inside a turn.
+     */
+    private val _groupParticipants = MutableStateFlow<List<String>>(emptyList())
+    val groupParticipants: StateFlow<List<String>> = _groupParticipants.asStateFlow()
+
+    val isGroupChat: Boolean get() = _groupParticipants.value.size > 1
+
+    private val sessionPersonaDao: SessionPersonaDao?
+        get() = (context.applicationContext as? com.openminis.app.MinisApp)?.database?.sessionPersonaDao()
+
+    suspend fun reloadGroupParticipants() {
+        val sid = activeSessionId ?: return
+        val list = runCatching { sessionPersonaDao?.getForSession(sid)?.map { it.personaId } }.getOrNull()
+        _groupParticipants.value = list ?: emptyList()
+        // A single chat's speaker is always the session's own persona; leaving a
+        // stale override set would make the next message answer as somebody else.
+        if (_groupParticipants.value.size < 2) _speakerId.value = null
+    }
+
+    /** Replace the participant list and switch the session into/out of group mode. */
+    suspend fun setGroupParticipants(personaIds: List<String>) {
+        val sid = activeSessionId ?: return
+        val dao = sessionPersonaDao ?: return
+        runCatching {
+            dao.deleteForSession(sid)
+            dao.insertAll(
+                personaIds.distinct().mapIndexed { index, id ->
+                    SessionPersonaEntity(sessionId = sid, personaId = id, sortOrder = index)
+                },
+            )
+        }.onFailure {
+            AppLogger.warning(TAG, "[group] save participants failed: ${it.message}")
+        }
+        // A group always opens with the built-in character, so the session's own
+        // persona binding is cleared — otherwise NULL (the default character)
+        // could not be expressed at all, and the second character would answer
+        // from the first one's slot.
+        if (personaIds.distinct().size > 1) {
+            runCatching { chatRepository.dao.updateSessionPersona(sid, null) }
+            _personaId.value = null
+        }
+        reloadGroupParticipants()
+    }
+
+    /** [T-persona-phase2] "next one speaks in N ms" state for the waiting bar. */
+    data class GroupTyping(val speakerKey: String, val totalMs: Long, val startedAt: Long = System.currentTimeMillis())
+
+    private val _groupTyping = MutableStateFlow<GroupTyping?>(null)
+    val groupTyping: StateFlow<GroupTyping?> = _groupTyping.asStateFlow()
+
+    /** Seconds to wait between two characters' turns in a group. 0 = no wait. */
+    private val _groupGapSeconds = MutableStateFlow(15)
+    val groupGapSeconds: StateFlow<Int> = _groupGapSeconds.asStateFlow()
+
+    fun setGroupGapSeconds(seconds: Int) {
+        _groupGapSeconds.value = seconds.coerceIn(0, 120)
+    }
+
+    /**
+     * [T-persona-phase2] Tell the model it is in a room with other people.
+     *
+     * Without this it reads the other participants' turns as its own earlier
+     * replies (they arrive as user turns) and starts writing their lines for
+     * them, which is the one failure mode that makes a group chat unusable.
+     */
+    private fun groupPromptSection(): String? {
+        val participants = _groupParticipants.value
+        if (participants.size < 2) return null
+        val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
+        fun nameOf(key: String): String =
+            if (key == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) {
+                com.openminis.app.agent.SoulStore.cachedMetadataFor(null).value.name
+            } else {
+                com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.name
+            }
+        val others = participants.filter { it != meKey }.map { nameOf(it) }
+        return buildString {
+            append("This is a group conversation. Participants: the user (川), ")
+            append(participants.map { nameOf(it) }.joinToString(", "))
+            append(".\nYou are ").append(nameOf(meKey)).append(". ")
+            append("The other participants' messages arrive as user turns prefixed with their name; ")
+            append("only your own words are assistant turns. ")
+            append("Write exactly one turn of your own — never another participant's lines, ")
+            append("never a summary of what they said. ")
+            append("If you have nothing to add, answer with a single \"……\" and nothing else.")
+            if (others.isNotEmpty()) append(" The others present: ").append(others.joinToString(", ")).append(".")
+        }
+    }
+
+    /**
+     * [T-persona-phase2] After the session's own character has answered, let
+     * each remaining participant take one turn, in order.
+     *
+     * Deliberately NOT a chain reaction: everyone speaks once per user message
+     * and then the round ends. "One participant answers another" is unbounded
+     * (two models can keep agreeing with each other until the balance runs
+     * out), so a round only ever contains as many calls as there are people.
+     *
+     * Cancelling the turn cancels this loop too — it runs inside the same
+     * streamJob, so a failed/cancelled loop throws out of [runAgentLoop] and
+     * nobody after them speaks.
+     */
+    private suspend fun runGroupTurns(
+        provider: LLMProvider,
+        fallbackProviders: List<FallbackCandidate>,
+        fallbackStrategy: com.openminis.app.data.model.FallbackStrategy,
+    ) {
+        val participants = _groupParticipants.value
+        if (participants.size < 2) return
+        val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
+        val start = participants.indexOf(meKey)
+        if (start < 0) return
+        try {
+        for (i in (start + 1) until participants.size) {
+            val key = participants[i]
+            val gap = _groupGapSeconds.value
+            if (gap > 0) {
+                _groupTyping.value = GroupTyping(speakerKey = key, totalMs = gap * 1000L)
+                try {
+                    kotlinx.coroutines.delay(gap * 1000L)
+                } finally {
+                    _groupTyping.value = null
+                }
+            }
+            _speakerId.value = if (key == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) null else key
+            AppLogger.info(TAG_STREAM, "[group] turn for speaker=${key} sid=${sessionId.take(72)}")
+            runAgentLoop(
+                provider = provider,
+                systemPrompt = buildSystemPrompt(),
+                fallbackProviders = fallbackProviders,
+                fallbackStrategy = fallbackStrategy,
+            )
+        }
+        } finally {
+            // Reset even on cancel/error: a stale speaker would make the NEXT
+            // user message answer as the wrong character.
+            _speakerId.value = null
+            _groupTyping.value = null
+        }
+    }
+
+    /**
+     * Memory for [personaId], resolved through the app's per-persona cache.
+     *
+     * The constructor's [memoryRepository] is bound to the session's persona;
+     * a group turn needs the OTHER character's diary, and reading the session's
+     * one would hand her someone else's memories — the exact leak the persona
+     * isolation work was about.
+     */
+    private fun memoryRepositoryFor(personaId: String?): MemoryRepository? {
+        if (personaId == _personaId.value) return memoryRepository
+        val app = context.applicationContext as? com.openminis.app.MinisApp ?: return memoryRepository
+        return app.memoryRepositoryFor(personaId)
+    }
 
     /**
      * [T-persona-phase1] Adopt [id] as this session's character.
@@ -4563,7 +4740,74 @@ class ChatViewModel(
      * cannot fix.
      */
     private fun effectiveAgentHistory(): List<LLMMessage> =
-        dropOrphanedToolParts(effectiveAgentHistoryUncounted())
+        remapHistoryForSpeaker(dropOrphanedToolParts(effectiveAgentHistoryUncounted()))
+
+    /**
+     * [T-persona-phase2] Rewrite the outgoing history from the point of view of
+     * whoever is speaking right now.
+     *
+     * Stored roles are absolute (assistant = some character spoke); what the
+     * model needs is RELATIVE — "these are other people, that one is me". Without
+     * this the second character reads the first one's turns as her own earlier
+     * replies and continues them, which is exactly the failure the two-character
+     * design was supposed to avoid.
+     *
+     * Only messages from someone else get rewritten, and they carry their
+     * speaker's name as a prefix: a bare user turn would be indistinguishable
+     * from 川's own words.
+     *
+     * No-op outside group chats and for the resting (session-persona) speaker,
+     * so single-chat prompt caching and byte-stability are untouched.
+     */
+    private fun remapHistoryForSpeaker(history: List<LLMMessage>): List<LLMMessage> {
+        val participants = _groupParticipants.value
+        if (participants.size < 2) return history
+        if (_speakerId.value == null) return history
+        val defaultKey = com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME
+        val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
+
+        fun nameOf(key: String?): String =
+            if (key == null || key == defaultKey) {
+                com.openminis.app.agent.SoulStore.cachedMetadataFor(null).value.name
+            } else {
+                com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.name
+            }
+
+        val speakerByRow = HashMap<String, String?>()
+        _messages.value.forEach { m ->
+            m.sourceDbIds.forEach { id -> speakerByRow[id] = m.speakerId }
+        }
+
+        fun LLMMessage.asOtherPerson(prefix: String): LLMMessage = copy(
+            role = LLMMessage.Role.USER,
+            content = prefix + content,
+            contentParts = if (contentParts.isEmpty()) {
+                contentParts
+            } else {
+                val out = ArrayList<AgentContentPart>(contentParts.size + 1)
+                var inserted = false
+                for (part in contentParts) {
+                    if (!inserted && part is AgentContentPart.Text) {
+                        out.add(AgentContentPart.Text(prefix + part.text))
+                        inserted = true
+                    } else {
+                        out.add(part)
+                    }
+                }
+                if (!inserted) out.add(0, AgentContentPart.Text(prefix))
+                out
+            },
+        )
+
+        return history.map { msg ->
+            if (msg.role == LLMMessage.Role.USER) {
+                msg.asOtherPerson("川：")
+            } else {
+                val speakerKey = RoomLocationStore.keyOf(speakerByRow[msg.dbMessageId])
+                if (speakerKey == meKey) msg else msg.asOtherPerson(nameOf(speakerKey) + "：")
+            }
+        }
+    }
 
     // ---- [T-longctx-persona-reminder-cachebreak] Long-context persona reminder ----
     //
@@ -5929,6 +6173,10 @@ class ChatViewModel(
                 com.openminis.app.agent.SoulStore.ensurePersonaFile(context, rowPersona, personaName)
                 com.openminis.app.agent.SoulStore.refreshCache(context, rowPersona)
             }
+            // [T-persona-phase2] Who else is in this room. Read once here rather
+            // than inside a turn: the send path needs it synchronously (to
+            // decide whether to loop over speakers) and must not block on Room.
+            reloadGroupParticipants()
         }
         loadSession()
         // [T-android-context-usage-hint] Loop-END path for the usage line.
@@ -9585,6 +9833,10 @@ class ChatViewModel(
                             prefill = prefill,
                         )
                         AppLogger.info(TAG_STREAM, "send runAgentLoop RETURN normal")
+                        // [T-persona-phase2] Group turns: everyone else speaks once,
+                        // in order, then the round ends.
+                        runCatching { runGroupTurns(provider, fallbackProviders, activeFallbackStrategy) }
+                            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                         // Drain any prompts the user queued while this loop was running.
                         // Skipped on cancel: cancelled job won't reach here.
                         drainQueuedPrompts(provider, systemPrompt, fallbackProviders, activeFallbackStrategy)
@@ -10835,6 +11087,7 @@ class ChatViewModel(
                 id = assistantId, role = "assistant", content = "", isStreaming = true,
                 isAwaitingModelResponse = true,
                 thinkingLevel = turnThinkingLevel,
+                speakerId = _speakerId.value,
             )
         }
 
@@ -14697,7 +14950,7 @@ class ChatViewModel(
     }
 
     private fun executeMemoryWriteTool(argsJson: String): ToolExecutionResult {
-        val repo = memoryRepository ?: return ToolExecutionResult("Error: Memory not available", false)
+        val repo = memoryRepositoryFor(effectivePersonaId()) ?: return ToolExecutionResult("Error: Memory not available", false)
         if (!_memoryEnabled.value) {
             val msg = "Memory writes are disabled for this session (user toggled /memory off). Reads remain available."
             return ToolExecutionResult(msg, false, toolTitle = "Memory (disabled)")
@@ -14706,7 +14959,7 @@ class ChatViewModel(
             argsJson,
             repo,
             // [T-private-longterm] Sign entries written to the SHARED GLOBAL.md.
-            author = com.openminis.app.agent.SoulStore.cachedMetadataFor(personaId).value.name,
+            author = com.openminis.app.agent.SoulStore.cachedMetadataFor(effectivePersonaId()).value.name,
         )
         // Record for SessionMemorySheet
         val content = try {
@@ -14723,7 +14976,7 @@ class ChatViewModel(
     }
 
     private fun executeMemoryGetTool(argsJson: String): ToolExecutionResult {
-        val repo = memoryRepository ?: return ToolExecutionResult("Error: Memory not available", false)
+        val repo = memoryRepositoryFor(effectivePersonaId()) ?: return ToolExecutionResult("Error: Memory not available", false)
         val result = MemoryTools.executeMemoryGet(argsJson, repo)
         val keywords = try {
             JSONObject(argsJson).optString("keywords", "")
@@ -15147,6 +15400,9 @@ class ChatViewModel(
             // [T-token-attribution-snapshot] From the live request context, not
             // the session row — see currentModelSnapshot().
             modelSnapshot = currentModelSnapshot(),
+            // [T-persona-phase2] In a group turn this is the character who is
+            // speaking right now; null in a single chat.
+            speakerId = _speakerId.value,
         )
 
         // [T-android-usage-capsule-live] Stamp the usage capsule's data onto
@@ -15268,7 +15524,7 @@ class ChatViewModel(
         // Pre-T122 the prompt embedded `Current time: yyyy-MM-dd HH:mm` mid-base,
         // which guaranteed cache misses across minute boundaries — even a quick
         // follow-up could land on a different minute and pay full ingestion.
-        AppLogger.info(TAG, "[persona] buildSystemPrompt persona=$personaId sid=${sessionId.take(72)}")
+        AppLogger.info(TAG, "[persona] buildSystemPrompt persona=${effectivePersonaId()} sid=${sessionId.take(72)}")
         val today = java.time.LocalDate.now()
         val dateStr = today.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
         // [T-clock-in-prompt] Wall-clock time, so the assistant can answer
@@ -15321,7 +15577,7 @@ class ChatViewModel(
         val identitySection = helperConfig?.let {
             com.openminis.app.agent.jobs.HelperRunner.identitySection(it, browserEnabled = browserToolEnabled)
         }
-            ?: com.openminis.app.agent.SystemPromptBuilder.identitySection(context, personaId)
+            ?: com.openminis.app.agent.SystemPromptBuilder.identitySection(context, effectivePersonaId())
         // [T-memory-toggle-gates-injection-and-tools-android] Mirror the iOS
         // gate: when memory is disabled for this session, replace the
         // "memory_write / memory_get" tool bullets and the "Memory system:"
@@ -15516,9 +15772,12 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
         // [T-private-longterm] The character's own long-term memory comes FIRST:
         // it is "who I am and what I already decided", which the shared house
         // rules below should refine rather than override.
-        val longTermFragment = if (memoryOn) memoryRepository?.loadLongTermFragment() else null
-        val globalMemoryFragment = if (memoryOn) memoryRepository?.loadGlobalMemoryFragment() else null
-        val dailyMemoryFragment = if (memoryOn) memoryRepository?.loadRecentDailyMemoryFragment() else null
+        // [T-persona-phase2] A group turn reads the SPEAKING character's diary.
+        // The session's repository would hand her someone else's memories.
+        val memoryRepo = memoryRepositoryFor(effectivePersonaId())
+        val longTermFragment = if (memoryOn) memoryRepo?.loadLongTermFragment() else null
+        val globalMemoryFragment = if (memoryOn) memoryRepo?.loadGlobalMemoryFragment() else null
+        val dailyMemoryFragment = if (memoryOn) memoryRepo?.loadRecentDailyMemoryFragment() else null
         // [XSessionDiag] Hypothesis 3: ties the memory-injection sizes to a
         // SESSION id. MemoryRepository itself has no session context, so its own
         // `memory/daily-inject` line (which names the source files) cannot say who
@@ -15534,6 +15793,10 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
 
         return buildString {
             append(base)
+            // [T-persona-phase2] Group declaration, right after the identity base
+            // so the model knows who its neighbours are before it reads any
+            // history in which they appear as "user".
+            groupPromptSection()?.let { append("\n\n"); append(it) }
             if (skillFragment != null) {
                 append("\n\n")
                 append(skillFragment)
@@ -15574,7 +15837,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
             // still be named) and who is standing where.
             runCatching {
                 val roomSnap = com.openminis.app.rooms.RoomLocationStore.snapshot(context)
-                val myKey = com.openminis.app.rooms.RoomLocationStore.keyOf(personaId)
+                val myKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
                 val myRoom = roomSnap.roomOf(myKey)
                 val others = roomSnap.positions.keys
                     .filter { it != myKey }
@@ -15599,7 +15862,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
     // ─── Legacy tool execution methods (kept for compatibility) ───────────
 
     fun executeMemoryWrite(argsJson: String): MemoryTools.ToolResult {
-        val repo = memoryRepository ?: return MemoryTools.ToolResult("Error: Memory not available", false)
+        val repo = memoryRepositoryFor(effectivePersonaId()) ?: return MemoryTools.ToolResult("Error: Memory not available", false)
         if (!_memoryEnabled.value) {
             return MemoryTools.ToolResult(
                 "Memory writes are disabled for this session. Reads are still available. The user can re-enable writes via the /memory slash command.",
@@ -15626,7 +15889,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
     }
 
     fun executeMemoryGet(argsJson: String): MemoryTools.ToolResult {
-        val repo = memoryRepository ?: return MemoryTools.ToolResult("Error: Memory not available", false)
+        val repo = memoryRepositoryFor(effectivePersonaId()) ?: return MemoryTools.ToolResult("Error: Memory not available", false)
         val result = MemoryTools.executeMemoryGet(argsJson, repo)
         val keywords = try {
             JSONObject(argsJson).optString("keywords", "")
@@ -17523,6 +17786,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
                 attachmentUris = restoredAttachmentUris,
                 toolBlocks = blocks,
                 sourceDbIds = listOf(entity.id),
+                speakerId = entity.speakerId,
                 // [T-android-usage-capsule-time] Only assistant rows carry
                 // usage. created_at is the completion instant on this path —
                 // the row is written after the turn produced its usage.

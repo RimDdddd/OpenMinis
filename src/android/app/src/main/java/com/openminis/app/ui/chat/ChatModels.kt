@@ -199,6 +199,15 @@ data class ChatMessage(
     // only when usage is present.
     val tokenUsage: ChatTokenUsage? = null,
     val completedAt: Long? = null,
+    /**
+     * [T-persona-phase2] Which character produced this assistant turn.
+     *
+     * Null means "whoever owns the session" — every single-chat row, and every
+     * row written before group chats existed. A group turn sets it so the
+     * bubble header names the right character and a reloaded transcript still
+     * knows who said what.
+     */
+    val speakerId: String? = null,
 ) {
     /**
      * [T-bridge-message-ui-leak-android] True when this UI message is the

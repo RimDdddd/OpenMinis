@@ -306,7 +306,12 @@ internal sealed class FlatChatItem {
         override fun hashCode(): Int = message.hashCode() * 31 + precededByUser.hashCode()
     }
 
-    data class AssistantHeader(val messageId: String) : FlatChatItem() {
+    data class AssistantHeader(
+        val messageId: String,
+        // [T-persona-phase2] Which character's header this is. Null = the
+        // session's own persona (single chat, and every pre-group message).
+        val speakerId: String? = null,
+    ) : FlatChatItem() {
         override val key = "header:$messageId"
         override val contentType = "header"
     }
@@ -761,7 +766,7 @@ internal fun buildFlatChatItems(
             .firstOrNull { it.role != "system" && !com.openminis.app.agent.jobs.AgentCallback.isCallbackText(it.content) }
         val isResumeContinuation = prevNonSystem?.role == "assistant"
         if (!isSystem && !isResumeContinuation) {
-            out.add(dedupe(FlatChatItem.AssistantHeader(message.id)))
+            out.add(dedupe(FlatChatItem.AssistantHeader(message.id, message.speakerId)))
         }
 
         val blocks = message.toolBlocks
