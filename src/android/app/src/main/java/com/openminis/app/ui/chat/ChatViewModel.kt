@@ -433,11 +433,11 @@ class ChatViewModel(
         // second turn in a row comes out as confusion about who is talking.
         // The previous speaker is pushed to the BACK of the order, unless the
         // user named her — being called out still beats the rule.
-        val order = mentioned + rest
-        if (mentioned.isEmpty() && order.size > 1 && order.first() == _groupLastSpeaker) {
-            return order.drop(1) + order.first()
-        }
-        return order
+        // [T-persona-phase2] Consecutive turns are allowed again — but the one
+        // continuing is asked whether she HAS anything to add instead of being
+        // told to produce a line (see speakAsGroup). Forbidding the second turn
+        // made the model read its own last line as somebody else's.
+        return mentioned + rest
     }
 
     /** [T-persona-phase2] Last speaker of the previous round, so a shuffle cannot repeat. */
@@ -511,6 +511,9 @@ class ChatViewModel(
             // Only the person who speaks LAST gets told to wrap up — telling
             // both of them turns the closing round into two farewells.
             _groupSpeakerClosing.value = closingLine && index == speakers.lastIndex
+            // Same person as the turn right before her? Then she is adding to
+            // her own last line, and the prompt offers the option of silence.
+            _groupContinuation.value = index > 0 && speakers[index - 1] == key
             _speakerId.value = speakerPersona
             groupTurnActive = true
             // [T-persona-phase2] The sandbox mounts `/var/minis/memory` per
@@ -554,6 +557,9 @@ class ChatViewModel(
             }
         }
     }
+
+    /** [T-persona-phase2] True while she is adding a second line to her own. */
+    private val _groupContinuation = MutableStateFlow(false)
 
     /** [T-persona-phase2] True while the current turn is the closing line of a countdown. */
     private val _groupSpeakerClosing = MutableStateFlow(false)
@@ -5117,8 +5123,14 @@ class ChatViewModel(
             }
             // Second person, not third: "写她这一句" reads as "write HER line",
             // which is the exact thing this prompt exists to prevent.
-            append("\n现在轮到你（").append(meName).append("）。接着上面写你自己这一句——")
-            append("只写你的动作和台词，不要写别人的，也不要在开头写你的名字。")
+            if (_groupContinuation.value) {
+                // Adding to her own last line: an option, not an obligation.
+                append("\n你刚刚已经说过一句。还有要补充的就接着说，没有就停止输出——")
+                append("什么都不必写，不要为了接话而说话。")
+            } else {
+                append("\n现在轮到你（").append(meName).append("）。接着上面写你自己这一句——")
+                append("只写你的动作和台词，不要写别人的，也不要在开头写你的名字。")
+            }
         }
         return listOf(
             LLMMessage(
