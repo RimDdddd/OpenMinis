@@ -296,6 +296,10 @@ class ChatViewModel(
             append("Do not put your name in front of your own reply — the app already shows it. ")
             // Every reply being an answer to 川 is what makes a group read as
             // a Q&A instead of a conversation.
+            // [T-persona-phase2] Asking and then answering yourself is what
+            // turns a conversation into a monologue in two characters' clothes.
+            append("If you ask someone a question, wait for the answer: do not answer it yourself, ")
+            append("and do not change the subject while it is still open. ")
             append("Who you address is your own call — one person, or the room. ")
             append("Take the last message as the one you are answering, whoever wrote it, ")
             append("and carry the room's conversation forward rather than only answering 川. ")
@@ -5094,6 +5098,17 @@ class ChatViewModel(
             append("用你自己的口吻，别接着上一条别人的自我介绍或独白往下讲。")
             append("对谁说、要不要说给所有人听，你自己判断——")
             append("每个人在这儿都是同伴。不要替别人写，也不要在开头写自己的名字。")
+            // [T-persona-phase2] Consecutive turns are the confusing case: the
+            // nearest message is HER OWN, so "answer the last thing said" has no
+            // target, and she ends up talking past a person who stayed silent.
+            val lastSpeaker = _messages.value.lastOrNull {
+                it.role == "assistant" && !it.isStreaming
+            }?.speakerId
+            val mySpeakerKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
+            if (com.openminis.app.rooms.RoomLocationStore.keyOf(lastSpeaker) == mySpeakerKey) {
+                append("上一条也是你说的，另一个人这一轮没开口。")
+                append("如果你刚才问了她一个问题、她还没答，就等——不要自己替自己接话，也不要换个话题岔过去。")
+            }
             if (!userPresentHere) append("川不在场，别对着他说话。")
             append("）")
         }

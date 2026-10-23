@@ -420,6 +420,36 @@ fun SoulSettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
+                // [T-persona-phase2] How talkative she is when nobody is
+                // addressing her — only used while two characters talk among
+                // themselves. 0 = mostly listens, 1 = always has something.
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "说话频率",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = "${(talkativeness * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    androidx.compose.material3.Slider(
+                        value = talkativeness,
+                        onValueChange = { talkativeness = it },
+                        valueRange = 0f..1f,
+                        steps = 9,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        text = "她俩自己聊时，这一轮开口的可能。你在场时不受影响。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
                 LangPicker(lang = lang, onLangChange = { lang = it })
             }
         }
