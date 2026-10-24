@@ -260,55 +260,13 @@ class ChatViewModel(
                 com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.name
             }
         val others = participants.filter { it != meKey }.map { nameOf(it) }
-        // [T-persona-phase2] Is 川 actually one of the participants? A room of
-        // two characters with him left out is them talking alone — the prompt
-        // must not keep referring to a man who is not there.
-        val userPresent = _groupParticipants.value.contains(
-            com.openminis.app.rooms.RoomLocationStore.USER_KEY,
-        )
-        return buildString {
-            // [T-persona-phase2] 川 is a person in the room, not "the user".
-            // The transcript still carries his lines as user turns because that
-            // is what the API has, but the prompt must not tell the model that
-            // one of the three people is the customer and the other two are
-            // here to serve him.
-            append("This is a group conversation in one room. People present: ")
-            append(participants.map { nameOf(it) }.joinToString(", "))
-            append(".\nYou are ").append(nameOf(meKey)).append(". ")
-            append("Everyone else speaks to you as user turns carrying that person's name in the ")
-            append("message's `name` field — 川 and 妙妙 alike. Your own words are the assistant turns, ")
-            append("and only yours. Nothing is written in the text itself. ")
-            if (userPresent) {
-                append("川's lines arrive as user turns — the `user` role is just the shape of the wire, ")
-                append("it does not make him the audience: everyone in this room is a peer, ")
-                append("yourself included. ")
-            } else {
-                append("川 is NOT in this room right now: nobody here can see or hear him, ")
-                append("and nothing anyone says is addressed to him. This conversation is just ")
-                append(participants.map { nameOf(it) }.joinToString(" and "))
-                append(" talking to each other. ")
-            }
-            append("Write exactly one turn of your own — never another participant's lines, ")
-            append("never a summary of what they said. ")
-            append("If you have nothing to add, answer with a single \"……\" and nothing else. ")
-            // The name prefixes in the history teach the model to label its
-            // own lines too ("妙妙：…"), which then renders as if she were
-            // narrating herself. Say it once, plainly.
-            append("Do not put your name in front of your own reply — the app already shows it. ")
-            // Every reply being an answer to 川 is what makes a group read as
-            // a Q&A instead of a conversation.
-            // [T-persona-phase2] Asking and then answering yourself is what
-            // turns a conversation into a monologue in two characters' clothes.
-            append("If you ask someone a question, wait for the answer: do not answer it yourself, ")
-            append("and do not change the subject while it is still open. ")
-            append("Who you address is your own call — one person, or the room. ")
-            append("Take the last message as the one you are answering, whoever wrote it, ")
-            append("and carry the room's conversation forward rather than only answering 川. ")
-            if (others.isNotEmpty()) append(" The others present: ").append(others.joinToString(", ")).append(".")
-            if (_groupSpeakerClosing.value) {
-                append(" This is the LAST line of the conversation: say one short closing line and stop.")
-            }
-        }
+        // [T-persona-phase2] 一句：跟谁在聊。不立规矩、不提房间。
+        //
+        // 单聊不需要说明书，群聊也不该有：她是谁由 SOUL 说清楚，对面有谁
+        // 一句带过就够了。之前那十条"只写自己、不要替人写、只回川"把一段
+        // 自然对话变成了协议——模型开始遵守格式，而不是跟一个人说话。
+        // 替人写由停序列兜。
+        return "聊天对象：" + others.joinToString("、") + "。"
     }
 
     /**
@@ -371,7 +329,7 @@ class ChatViewModel(
                     _groupLastSpeaker = order.lastOrNull()
                     speakAsGroup(
                         order, provider, fallbacks, strategy,
-                        closingLine = isLast, sparse = !userPresent,
+                        closingLine = isLast,
                     )
                     if (isLast) {
                         _groupRoundsRemaining.value = null
@@ -433,23 +391,19 @@ class ChatViewModel(
         // second turn in a row comes out as confusion about who is talking.
         // The previous speaker is pushed to the BACK of the order, unless the
         // user named her — being called out still beats the rule.
-        // [T-persona-phase2] Consecutive turns are allowed again — but the one
-        // continuing is asked whether she HAS anything to add instead of being
-        // told to produce a line (see speakAsGroup). Forbidding the second turn
-        // made the model read its own last line as somebody else's.
-        return mentioned + rest
+        // [T-persona-phase2] No consecutive turns. Handing the round back to the
+        // person who just spoke makes her re-read her own line as the thing to
+        // answer, and she starts doubting whose words are whose. A named
+        // character still goes first — being called out beats the rule.
+        val order = mentioned + rest
+        if (mentioned.isEmpty() && order.size > 1 && order.first() == _groupLastSpeaker) {
+            return order.drop(1) + order.first()
+        }
+        return order
     }
 
     /** [T-persona-phase2] Last speaker of the previous round, so a shuffle cannot repeat. */
     private var _groupLastSpeaker: String? = null
-
-    /** [T-persona-phase2] How readily this character speaks unprompted (SOUL field). */
-    private fun talkativenessOf(key: String): Float =
-        if (key == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) {
-            com.openminis.app.agent.SoulStore.cachedMetadataFor(null).value.talkativeness
-        } else {
-            com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.talkativeness
-        }
 
     /** Display name for a participant key, for error notices. */
     private fun groupNameOf(key: String): String =
@@ -477,28 +431,10 @@ class ChatViewModel(
         fallbackProviders: List<FallbackCandidate>,
         fallbackStrategy: com.openminis.app.data.model.FallbackStrategy,
         closingLine: Boolean = false,
-        // [T-persona-phase2] Let someone stay quiet this round. SillyTavern's
-        // "talkativeness": a group where everybody answers every turn is a
-        // panel discussion, not a room. Only used when 川 is not present —
-        // when he asks something, everybody may answer.
-        sparse: Boolean = false,
     ) {
         val gap = _groupGapSeconds.value
         val speakers = order.filter { it != com.openminis.app.rooms.RoomLocationStore.USER_KEY }
         for ((index, key) in speakers.withIndex()) {
-            // The last speaker always speaks: a round where nobody does leaves
-            // the user staring at a stopped progress bar.
-            // Each character has her own rate (SOUL `talkativeness`); the last
-            // speaker always speaks so a round never ends in silence.
-            val skipChance = (1f - talkativenessOf(key)).coerceIn(0.05f, 0.9f)
-            // With only two people a skip would hand the round to whoever spoke
-            // last, which is exactly the consecutive turn being cancelled.
-            if (sparse && speakers.size > 2 && index < speakers.lastIndex &&
-                kotlin.random.Random.nextFloat() < skipChance
-            ) {
-                AppLogger.info(TAG_STREAM, "[group] speaker=$key stays quiet this round")
-                continue
-            }
             if (gap > 0) {
                 _groupTyping.value = GroupTyping(speakerKey = key, totalMs = gap * 1000L)
                 try {
@@ -511,9 +447,6 @@ class ChatViewModel(
             // Only the person who speaks LAST gets told to wrap up — telling
             // both of them turns the closing round into two farewells.
             _groupSpeakerClosing.value = closingLine && index == speakers.lastIndex
-            // Same person as the turn right before her? Then she is adding to
-            // her own last line, and the prompt offers the option of silence.
-            _groupContinuation.value = index > 0 && speakers[index - 1] == key
             _speakerId.value = speakerPersona
             groupTurnActive = true
             // [T-persona-phase2] The sandbox mounts `/var/minis/memory` per
@@ -557,9 +490,6 @@ class ChatViewModel(
             }
         }
     }
-
-    /** [T-persona-phase2] True while she is adding a second line to her own. */
-    private val _groupContinuation = MutableStateFlow(false)
 
     /** [T-persona-phase2] True while the current turn is the closing line of a countdown. */
     private val _groupSpeakerClosing = MutableStateFlow(false)
@@ -627,7 +557,7 @@ class ChatViewModel(
                 _groupLastSpeaker = order.lastOrNull()
                 speakAsGroup(
                     order, provider, fallbackProviders, fallbackStrategy,
-                    closingLine = isLast, sparse = !userPresent,
+                    closingLine = isLast,
                 )
                 if (isLast) {
                     _groupRoundsRemaining.value = null
@@ -5123,14 +5053,8 @@ class ChatViewModel(
             }
             // Second person, not third: "写她这一句" reads as "write HER line",
             // which is the exact thing this prompt exists to prevent.
-            if (_groupContinuation.value) {
-                // Adding to her own last line: an option, not an obligation.
-                append("\n你刚刚已经说过一句。还有要补充的就接着说，没有就停止输出——")
-                append("什么都不必写，不要为了接话而说话。")
-            } else {
-                append("\n现在轮到你（").append(meName).append("）。接着上面写你自己这一句——")
-                append("只写你的动作和台词，不要写别人的，也不要在开头写你的名字。")
-            }
+            append("\n现在轮到你（").append(meName).append("）。接着上面写你自己这一句——")
+            append("只写你的动作和台词，不要写别人的，也不要在开头写你的名字。")
         }
         return listOf(
             LLMMessage(

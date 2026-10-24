@@ -59,16 +59,6 @@ data class SoulMetadata(
      */
     val icon: String,
     val style: String,
-    /**
-     * [T-persona-phase2] How readily this character speaks when nobody is
-     * addressing her — SillyTavern's `talkativeness`, on the character instead
-     * of on a group entry, because it is a trait, not a room setting.
-     *
-     * 1.0 = always has something to say; 0.2 = mostly listens. Read by the group
-     * loop in a conversation 川 is not part of; when he asks something everyone
-     * answers regardless.
-     */
-    val talkativeness: Float = 0.5f,
     /** `"auto"`, `"zh"`, `"en"`, or any free-form tag. */
     val lang: String,
 ) {
@@ -95,7 +85,6 @@ data class SoulMetadata(
             emoji = "",
             icon = "",
             style = "",
-            talkativeness = 0.5f,
             lang = "auto",
         )
     }
@@ -133,7 +122,6 @@ object SoulMDParser {
         var icon = SoulMetadata.DEFAULT.icon
         var style = SoulMetadata.DEFAULT.style
         var lang = SoulMetadata.DEFAULT.lang
-        var talkativeness = SoulMetadata.DEFAULT.talkativeness
         for (raw in frontmatter) {
             val line = raw.trim()
             val colon = line.indexOf(':')
@@ -153,12 +141,10 @@ object SoulMDParser {
                 "icon" -> icon = value
                 "style" -> style = value
                 "lang" -> if (value.isNotEmpty()) lang = value
-                "talkativeness" -> value.toFloatOrNull()
-                    ?.let { talkativeness = it.coerceIn(0f, 1f) }
                 else -> Unit
             }
         }
-        return SoulFile(SoulMetadata(name, emoji, icon, style, talkativeness, lang), body)
+        return SoulFile(SoulMetadata(name, emoji, icon, style, lang), body)
     }
 
     /**
@@ -186,11 +172,6 @@ object SoulMDParser {
             sb.append("icon: \"").append(escape(file.metadata.icon)).append("\"\n")
         }
         sb.append("style: \"").append(escape(file.metadata.style)).append("\"\n")
-        // Written only when it differs from the default, so a file that never
-        // touched it keeps its original 3-key shape.
-        if (file.metadata.talkativeness != SoulMetadata.DEFAULT.talkativeness) {
-            sb.append("talkativeness: ").append(file.metadata.talkativeness).append("\n")
-        }
         sb.append("lang: \"").append(escape(file.metadata.lang)).append("\"\n")
         sb.append("---\n\n")
         sb.append(file.body)

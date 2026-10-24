@@ -120,10 +120,6 @@ fun SoulSettingsScreen(
     var name by remember { mutableStateOf(SoulMetadata.DEFAULT.name) }
     var style by remember { mutableStateOf(SoulMetadata.DEFAULT.style) }
     var lang by remember { mutableStateOf(SoulMetadata.DEFAULT.lang) }
-    // [T-persona-phase2] Not editable from this screen (yet): it is carried
-    // through load -> edit -> save so saving a name or a style does not silently
-    // reset how talkative this character is.
-    var talkativeness by remember { mutableStateOf(SoulMetadata.DEFAULT.talkativeness) }
     var body by remember { mutableStateOf("") }
     var loaded by remember { mutableStateOf(false) }
     var showRestoreDialog by remember { mutableStateOf(false) }
@@ -197,7 +193,6 @@ fun SoulSettingsScreen(
         preservedEmoji = parsed.metadata.emoji
         icon = parsed.metadata.icon
         style = parsed.metadata.style
-        talkativeness = parsed.metadata.talkativeness
         lang = parsed.metadata.lang
         body = parsed.body
         // [T-android-soul-save-in-appbar] Snapshot what disk holds, so the
@@ -214,7 +209,6 @@ fun SoulSettingsScreen(
                 emoji = parsed.metadata.emoji.ifBlank { SoulMetadata.DEFAULT.emoji },
                 icon = parsed.metadata.icon,
                 style = parsed.metadata.style,
-                talkativeness = parsed.metadata.talkativeness,
                 lang = parsed.metadata.lang.ifBlank { SoulMetadata.DEFAULT.lang },
             ),
             body = parsed.body,
@@ -240,7 +234,6 @@ fun SoulSettingsScreen(
             emoji = preservedEmoji.ifBlank { SoulMetadata.DEFAULT.emoji },
             icon = icon,
             style = style,
-            talkativeness = talkativeness,
             lang = lang.ifBlank { SoulMetadata.DEFAULT.lang },
         ),
         body = body,
@@ -419,36 +412,6 @@ fun SoulSettingsScreen(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(8.dp))
-                // [T-persona-phase2] How talkative she is when nobody is
-                // addressing her — only used while two characters talk among
-                // themselves. 0 = mostly listens, 1 = always has something.
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "说话频率",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = "${(talkativeness * 100).toInt()}%",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    androidx.compose.material3.Slider(
-                        value = talkativeness,
-                        onValueChange = { talkativeness = it },
-                        valueRange = 0f..1f,
-                        steps = 9,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        text = "她俩自己聊时，这一轮开口的可能。你在场时不受影响。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    )
-                }
                 Spacer(Modifier.height(8.dp))
                 LangPicker(lang = lang, onLangChange = { lang = it })
             }
