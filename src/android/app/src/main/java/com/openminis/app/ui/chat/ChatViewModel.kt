@@ -259,7 +259,11 @@ class ChatViewModel(
             } else {
                 com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.name
             }
-        val others = participants.filter { it != meKey }.map { nameOf(it) }
+        val others = participants.filter { it != meKey }.map { nameOf(it) }.toMutableList()
+        // 川 在场就该在名单里，不然她只顾着跟另一个角色说，他说的话成了背景音。
+        if (_groupParticipants.value.contains(com.openminis.app.rooms.RoomLocationStore.USER_KEY)) {
+            others.add(0, "川")
+        }
         // [T-persona-phase2] 一句：跟谁在聊。不立规矩、不提房间。
         //
         // 单聊不需要说明书，群聊也不该有：她是谁由 SOUL 说清楚，对面有谁
@@ -347,8 +351,7 @@ class ChatViewModel(
                 AppLogger.error(TAG_STREAM, "[group] startGroupChat failed: ${e.message}")
                 setInlineError(e.message ?: "群聊启动失败")
             } finally {
-                groupTurnActive = false
-                _speakerId.value = null
+                    _speakerId.value = null
                 _groupTyping.value = null
                 _groupSpeakerClosing.value = false
                 _groupRoundsRemaining.value = null
@@ -413,9 +416,6 @@ class ChatViewModel(
             com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.name
         }
 
-    val isGroupChat: Boolean
-        get() = groupCharacterKeys().size > 1 || (_groupParticipants.value.size > 1 && !_groupParticipants.value.contains(com.openminis.app.rooms.RoomLocationStore.USER_KEY))
-
     /** [T-persona-phase2] "聊三轮后结尾": rounds left before the closing line. Null = no limit. */
     private val _groupRoundsRemaining = MutableStateFlow<Int?>(null)
     val groupRoundsRemaining: StateFlow<Int?> = _groupRoundsRemaining.asStateFlow()
@@ -444,11 +444,11 @@ class ChatViewModel(
                 }
             }
             val speakerPersona = if (key == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) null else key
+            speakingGroupTurn = true
             // Only the person who speaks LAST gets told to wrap up — telling
             // both of them turns the closing round into two farewells.
             _groupSpeakerClosing.value = closingLine && index == speakers.lastIndex
             _speakerId.value = speakerPersona
-            groupTurnActive = true
             // [T-persona-phase2] The sandbox mounts `/var/minis/memory` per
             // session, and the mount table is rebuilt on every command — so
             // publishing the speaker here is what makes a shell run by the
@@ -487,6 +487,7 @@ class ChatViewModel(
                 // Never let a stop list outlive the turn that asked for it: the
                 // next request in this session might be an ordinary chat.
                 com.openminis.app.provider.StopSequences.clear()
+                speakingGroupTurn = false
             }
         }
     }
@@ -567,7 +568,6 @@ class ChatViewModel(
         } finally {
             // Reset even on cancel/error: a stale speaker would make the NEXT
             // user message answer as the wrong character.
-            groupTurnActive = false
             com.openminis.app.provider.StopSequences.clear()
             _speakerId.value = null
             _groupTyping.value = null
@@ -5008,33 +5008,23 @@ class ChatViewModel(
      */
     private fun effectiveAgentHistory(): List<LLMMessage> {
         val repaired = dropOrphanedToolParts(effectiveAgentHistoryUncounted())
-        // [T-persona-phase2] Group turn, no tools in play: send the whole
-        // conversation as ONE piece of script and let her finish her own line.
+        // [T-persona-phase2] 单层：所有人的话都在同一侧，她只负责往下续写。
         //
-        // This is the SillyTavern shape, and the reason for it is the thing the
-        // model itself said out loud: with role-separated turns it worked out
-        // that "two characters are mixed in one model" — because the `user` side
-        // contained a speaker calling herself 妙妙. A script has no roles to
-        // reason about: it is one block of text ending with "…轮到你（米米）：",
-        // and all she has to do is continue it. There is no "which of these
-        // turns am I" to get wrong.
-        //
-        // Once the loop touches a tool the history carries tool_use/tool_result
-        // blocks that only exist in the role form, so those turns fall back to
-        // the structured path automatically.
-        val remapped = remapHistoryForSpeaker(repaired)
-        val scripted = scriptedGroupHistory(remapped)
-        return scripted ?: withSpeakerTurnHint(remapped)
+        // 只要分成"用户/角色"两层，屋里三个人就一定有一个要被塞错格子，模型
+        // 也就一定会去推断"哪几条是我说的"。单层没有这个问题——一串话，只是
+        // 说话的人不同。她那句用后缀标（你说的），不用前缀：前缀会被抄。
+        val single = singleLayerHistory(repaired)
+        return single ?: remapHistoryForSpeaker(repaired)
     }
 
     /**
-     * [T-persona-phase2] Render the group history as one script block, or null
-     * when the structured form is required (no group turn running, or tool
-     * traffic present).
+     * [T-persona-phase2] 把整段对话摊成一层文本，末尾留出她要说的地方。
+     * 带工具调用的回合返回 null（那种回合只有分层结构表达得了）。
      */
-    private fun scriptedGroupHistory(history: List<LLMMessage>): List<LLMMessage>? {
-        if (!groupTurnActive) return null
-        if (groupCharacterKeys().size < 2) return null
+    private fun singleLayerHistory(history: List<LLMMessage>): List<LLMMessage>? {
+        // 只有群聊轮次才摊平。单聊保持原来的两层，一行都不动。
+        if (!groupTurnActiveNow()) return null
+        if (history.isEmpty()) return null
         if (history.any { m ->
                 m.contentParts.any {
                     it is AgentContentPart.ToolUse || it is AgentContentPart.ToolResult
@@ -5044,189 +5034,48 @@ class ChatViewModel(
 
         val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
         val meName = groupNameOf(meKey)
-        val script = buildString {
-            append("下面是同一间屋子里的对话记录（只有文字，没有角色标记）：\n\n")
+        val text = buildString {
             history.forEach { m ->
                 if (m.content.isBlank()) return@forEach
-                val who = m.name?.takeIf { it.isNotBlank() } ?: if (m.role == LLMMessage.Role.USER) "川" else meName
-                append(who).append("：").append(m.content.trim()).append("\n")
+                val speakerKey = if (m.role == LLMMessage.Role.USER) {
+                    com.openminis.app.rooms.RoomLocationStore.USER_KEY
+                } else {
+                    // 单聊里 assistant 的 speakerId 是空的（等于会话角色），
+                    // 所以反查不到就用会话角色兜底，别一律当成默认角色。
+                    val row = _messages.value.firstOrNull { it.sourceDbIds.contains(m.dbMessageId) }
+                    if (row?.speakerId != null) {
+                        com.openminis.app.rooms.RoomLocationStore.keyOf(row.speakerId)
+                    } else if (row != null) {
+                        com.openminis.app.rooms.RoomLocationStore.keyOf(_personaId.value)
+                    } else {
+                        com.openminis.app.rooms.RoomLocationStore.keyOf(_personaId.value)
+                    }
+                }
+                append(m.content.trim())
+                if (speakerKey == meKey) {
+                    // 后缀标记：她的旧发言归她，但标记不会变成下一个说话人的前缀。
+                    append("（你说的）")
+                } else {
+                    append("（").append(if (speakerKey == com.openminis.app.rooms.RoomLocationStore.USER_KEY) "川" else groupNameOf(speakerKey)).append("说的）")
+                }
+                append("\n")
             }
-            // Second person, not third: "写她这一句" reads as "write HER line",
-            // which is the exact thing this prompt exists to prevent.
-            append("\n现在轮到你（").append(meName).append("）。接着上面写你自己这一句——")
-            append("只写你的动作和台词，不要写别人的，也不要在开头写你的名字。")
+            append("\n现在轮到你（").append(meName).append("）接着说。")
         }
         return listOf(
             LLMMessage(
                 role = LLMMessage.Role.USER,
-                content = script,
-                contentParts = listOf(AgentContentPart.Text(script)),
+                content = text,
+                contentParts = listOf(AgentContentPart.Text(text)),
             ),
         )
     }
 
-    /** [T-persona-phase2] True while a group turn is generating (see speakAsGroup). */
+    /** 群聊轮次进行中（speakAsGroup 里置真）。 */
     @Volatile
-    private var groupTurnActive = false
+    private var speakingGroupTurn = false
 
-    /**
-     * [T-persona-phase2] Tell the model whose turn this is, as the LAST thing it
-     * reads.
-     *
-     * Prefixing everyone else's lines was not enough on its own: with three
-     * speakers in one transcript the model kept answering 川, because the
-     * nearest "user" turn is his. Naming the current speaker at the tail — the
-     * same trick SillyTavern's group prompts use — turns "continue a chat" into
-     * "write THIS character's next line".
-     *
-     * Not persisted, never rendered: it exists only on the request.
-     */
-    private fun withSpeakerTurnHint(history: List<LLMMessage>): List<LLMMessage> {
-        if (!groupTurnActive) return history
-        if (groupCharacterKeys().size < 2) return history
-        val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
-        val me = groupNameOf(meKey)
-        val others = groupCharacterKeys().filter { it != meKey }.map { groupNameOf(it) }
-        val hint = buildString {
-            val userPresentHere = _groupParticipants.value.contains(
-                com.openminis.app.rooms.RoomLocationStore.USER_KEY,
-            )
-            append("（说明：这是同一个房间里的对话，在场的是 ")
-            append((if (userPresentHere) others + "川" else others).joinToString("、"))
-            append("。现在轮到你（").append(me).append("）说话，只写你自己这一句；")
-            append("用你自己的口吻，别接着上一条别人的自我介绍或独白往下讲。")
-            append("对谁说、要不要说给所有人听，你自己判断——")
-            append("每个人在这儿都是同伴。不要替别人写，也不要在开头写自己的名字。")
-            // [T-persona-phase2] Consecutive turns are the confusing case: the
-            // nearest message is HER OWN, so "answer the last thing said" has no
-            // target, and she ends up talking past a person who stayed silent.
-            val lastSpeaker = _messages.value.lastOrNull {
-                it.role == "assistant" && !it.isStreaming
-            }?.speakerId
-            val mySpeakerKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
-            if (com.openminis.app.rooms.RoomLocationStore.keyOf(lastSpeaker) == mySpeakerKey) {
-                append("上一条也是你说的，另一个人这一轮没开口。")
-                append("如果你刚才问了她一个问题、她还没答，就等——不要自己替自己接话，也不要换个话题岔过去。")
-            }
-            if (!userPresentHere) append("川不在场，别对着他说话。")
-            append("）")
-        }
-        return history + LLMMessage(
-            role = LLMMessage.Role.USER,
-            content = hint,
-            contentParts = listOf(AgentContentPart.Text(hint)),
-        )
-    }
-
-    /**
-     * [T-persona-phase2] Rewrite the outgoing history from the point of view of
-     * whoever is speaking right now.
-     *
-     * Stored roles are absolute (assistant = some character spoke); what the
-     * model needs is RELATIVE — "these are other people, that one is me". Without
-     * this the second character reads the first one's turns as her own earlier
-     * replies and continues them, which is exactly the failure the two-character
-     * design was supposed to avoid.
-     *
-     * Only messages from someone else get rewritten, and they carry their
-     * speaker's name as a prefix: a bare user turn would be indistinguishable
-     * from 川's own words.
-     *
-     * No-op outside group chats and for the resting (session-persona) speaker,
-     * so single-chat prompt caching and byte-stability are untouched.
-     */
-    private fun remapHistoryForSpeaker(history: List<LLMMessage>): List<LLMMessage> {
-        // Group-ness is decided by the membership list, NOT by whether a
-        // speaker override is set: the built-in character speaks with a null
-        // override, so the old `_speakerId == null` early-return made every
-        // one of HER turns skip the remap — the other character's lines
-        // stayed assistant turns and she read them as her own words.
-        if (groupCharacterKeys().size < 2) return history
-        val defaultKey = com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME
-        val meKey = com.openminis.app.rooms.RoomLocationStore.keyOf(effectivePersonaId())
-
-        fun nameOf(key: String?): String =
-            if (key == null || key == defaultKey) {
-                com.openminis.app.agent.SoulStore.cachedMetadataFor(null).value.name
-            } else {
-                com.openminis.app.agent.SoulStore.cachedMetadataFor(key).value.name
-            }
-
-        val speakerByRow = HashMap<String, String?>()
-        _messages.value.forEach { m ->
-            m.sourceDbIds.forEach { id -> speakerByRow[id] = m.speakerId }
-        }
-
-        /**
-         * [T-persona-phase2] Prefix a name, keep the turn on the assistant side.
-         *
-         * SillyTavern's rule: `role = is_user ? user : assistant`, and for other
-         * people only the CONTENT gets `name: `. Flipping a peer's turn to
-         * `user` was the whole bug — the model then read another character as
-         * "the user", and adopted her identity in the next reply.
-         */
-        fun LLMMessage.withNamePrefix(prefix: String): LLMMessage = copy(
-            content = prefix + content,
-            contentParts = if (contentParts.isEmpty()) {
-                contentParts
-            } else {
-                val out = ArrayList<AgentContentPart>(contentParts.size + 1)
-                var inserted = false
-                for (part in contentParts) {
-                    if (!inserted && part is AgentContentPart.Text) {
-                        out.add(AgentContentPart.Text(prefix + part.text))
-                        inserted = true
-                    } else {
-                        out.add(part)
-                    }
-                }
-                if (!inserted) out.add(0, AgentContentPart.Text(prefix))
-                out
-            },
-        )
-
-        // [T-persona-phase2] Walk forward once, remembering who last spoke, so
-        // every line can be labelled "who → whom". The addressee is not stored
-        // anywhere: it is simply the most recent message by somebody else, which
-        // is what the speaker was answering when she wrote this line. Without it
-        // the model has to GUESS who a question was aimed at, and burns a few
-        // hundred reasoning tokens doing it (observed: "轮到我，但她是在问谁").
-        val userKey = com.openminis.app.rooms.RoomLocationStore.USER_KEY
-        return history.map { msg ->
-            val speakerKey = if (msg.role == LLMMessage.Role.USER) {
-                userKey
-            } else {
-                com.openminis.app.rooms.RoomLocationStore.keyOf(speakerByRow[msg.dbMessageId])
-            }
-
-            // Her own words stay bare — that is what "your turn" means.
-            if (speakerKey == meKey && msg.role != LLMMessage.Role.USER) return@map msg
-            // Tool traffic stays untouched: annotating it would corrupt a
-            // tool_use payload and the pairing check rejects the request.
-            val hasToolTraffic = msg.contentParts.any {
-                it is AgentContentPart.ToolUse || it is AgentContentPart.ToolResult
-            }
-            if (hasToolTraffic) return@map msg
-
-            // [T-persona-phase2] Identity is STRUCTURAL, not inferred.
-            //
-            // `assistant` holds this character's words and nobody else's; every
-            // other voice — 川 included — arrives as a `user` turn carrying that
-            // person's name in the `name` field. The model therefore never has
-            // to work out "which of these turns are mine": there is exactly one
-            // answer, by construction. That inference was the bug: with a peer's
-            // line sitting on the assistant side, the model read it as its own
-            // and answered as her.
-            //
-            // The name stays out of the text on purpose — anything written into
-            // the content is a format the model copies, and what it copied was
-            // the other person's name.
-            msg.copy(
-                role = LLMMessage.Role.USER,
-                name = if (speakerKey == userKey) "川" else nameOf(speakerKey),
-            )
-        }
-    }
+    private fun groupTurnActiveNow(): Boolean = speakingGroupTurn
 
     // ---- [T-longctx-persona-reminder-cachebreak] Long-context persona reminder ----
     //
