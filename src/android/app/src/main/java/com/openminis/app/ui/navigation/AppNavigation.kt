@@ -177,6 +177,9 @@ object Routes {
     const val MCP = "mcp"
     /** [T-soul-md] SOUL.md editor. */
     const val SOUL = "soul"
+
+    /** [T-rooms] The room grid: who is standing where. */
+    const val ROOMS = "rooms"
     const val MEMORY_FILE_EDIT = "memory_file/{fileName}/{isGlobal}"
     const val PERMISSIONS = "permissions"
     /**
@@ -1357,6 +1360,13 @@ fun AppNavigation(
                     envVarRepository = envVarRepository,
                 )
             }
+        }
+
+        // [T-rooms] 房间格子图。
+        composable(Routes.ROOMS) {
+            com.openminis.app.ui.rooms.RoomMapScreen(
+                onBack = { navController.safePopBackStack() },
+            )
         }
 
         // [T-soul-md] SOUL.md editor.

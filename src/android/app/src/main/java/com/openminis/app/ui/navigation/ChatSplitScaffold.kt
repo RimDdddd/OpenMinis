@@ -881,6 +881,7 @@ fun ChatSplitScaffoldRoute(
                 onTerminalClick = { navController.safeNavigate(Routes.terminal()) },
                 onRootfsClick = { navController.safeNavigate(Routes.ROOTFS_MANAGEMENT) },
                 onScheduledTasksClick = { navController.safeNavigate(Routes.SCHEDULED_TASKS) },
+                onRoomsClick = { navController.safeNavigate(Routes.ROOMS) },
                 selectedSessionId = selectedSessionId,
                 // [T-android-draft-placeholder-row] Synthetic "New Chat" row,
                 // never persisted — see the listPane param docs.
@@ -922,6 +923,7 @@ fun ChatSplitScaffoldRoute(
                 onOpenTerminal = {
                     navController.safeNavigate(Routes.terminal(sessionId = sessionId))
                 },
+                onOpenRooms = { navController.safeNavigate(Routes.ROOMS) },
                 onOpenTerminalWithCommand = { command ->
                     navController.safeNavigate(
                         Routes.terminal(initCommand = command, sessionId = sessionId),

@@ -78,6 +78,12 @@ object SessionMounts {
         for ((linux, dir) in candidates) {
             if (ensureDir(dir)) mounts[linux] = dir.absolutePath else skipped += linux
         }
+        // [T-rooms] 房间地图。这个文件是 app 写的，只在它存在时挂 —— 第一次走动
+        // 之前没有地图可看，挂一条不存在的路径只会让 guest 看到一个空的占位目录。
+        // 单个文件挂进 /var/minis/rooms.json，角色 cat 一下就知道谁在哪。
+        val roomsFile = File(globalBase, "rooms.json")
+        if (roomsFile.isFile) mounts["/var/minis/rooms.json"] = roomsFile.absolutePath
+
         // External (SAF-picked) folders are the user's, not ours to create,
         // and are passed through as before: under scoped storage a Java
         // `isDirectory` can say false for a tree the process can still reach,

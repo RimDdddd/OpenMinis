@@ -1365,6 +1365,11 @@
     <string name="chat_new_chat_stop_dialog_confirm">Stop &amp; New Chat</string>
     <string name="chat_menu_clear_chat">Clear Chat</string>
     <string name="chat_menu_open_terminal">Open Terminal</string>
+    <string name="chat_menu_rooms">Rooms</string>
+    <string name="sessionlist_rooms">Rooms</string>
+    <string name="rooms_title">Rooms</string>
+    <string name="rooms_you_are_in">You are in %1$s</string>
+    <string name="rooms_tap_hint">Tap a room to walk there.</string>
     <string name="chat_menu_open_browser">Open Browser</string>
     <string name="chat_menu_browse_chat_files">Browse Chat Files</string>
     <string name="chat_menu_enhanced_cache">Enhanced Cache</string>

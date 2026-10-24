@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Terminal
@@ -62,6 +63,8 @@ internal fun toolAccentColor(toolName: String): Color = when (toolName) {
     "read_image" -> Color(0xFFAF52DE)
     "memory_write", "memory_get" -> Color(0xFFFF2D55)
     "web_search" -> Color(0xFF32ADE6)    // iOS: .cyan for search
+    // [T-rooms] 偏绿的青：一个地方，不是一次计算。
+    "move_room" -> Color(0xFF30B0A0)
     // [T-sub-agents-v1] Current name + the pre-rename one still in shipped transcripts.
     "subagent_task", "delegate_task", "agent_status" -> HelperAccentStatic  // iOS: HelperAccent.color (electric violet)
     else -> Color(0xFF8E8E93)
@@ -77,6 +80,7 @@ internal fun toolIconFor(toolName: String) = when (toolName) {
     "read_image" -> Icons.Default.Image                // iOS: photo
     "memory_write", "memory_get" -> Icons.Default.Psychology // iOS: brain.head.profile
     "web_search" -> Icons.Default.Search               // iOS: magnifyingglass
+    "move_room" -> Icons.Default.MeetingRoom           // [T-rooms] a door
     "subagent_task", "delegate_task", "agent_status" -> Icons.Default.Groups  // iOS: person.2.wave.2
     else -> Icons.Default.Build
 }

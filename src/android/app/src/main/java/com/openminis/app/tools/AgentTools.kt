@@ -59,6 +59,7 @@ object AgentTools {
             if (!isHelper) add(memoryWriteDefinition())
             add(memoryGetDefinition())
         }
+        if (!isHelper) add(moveRoomDefinition())
         if (!isHelper && delegateEnabled) {
             add(subAgentTaskDefinition(rosterNames))
         }
@@ -187,6 +188,26 @@ object AgentTools {
         ),
         required = listOf("tool_title", "action"),
         propertyOrdering = listOf("tool_title", "action", "tab_id", "url", "selector", "text", "coordinate_x", "coordinate_y", "direction", "amount", "scroll_count", "item_selector", "script", "user_agent", "max_depth", "keywords", "fuzzy", "cookies", "timeout", "viewport_width", "viewport_height", "reset", "full_page"),
+    )
+
+    /**
+     * [T-rooms] Where she is standing is state, like the clock, and it only
+     * changes when she actually goes somewhere. The description hammers that
+     * distinction because the failure mode is not "forgot the tool" but "calls
+     * it every time a room is mentioned in passing", which would make the map
+     * drift away from what is happening in the conversation.
+     */
+    private fun moveRoomDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "move_room",
+        description = "Move yourself to another room. Position is state, not a topic: call it when you " +
+            "actually go somewhere or the user sends you there, and only with a room name that appears in " +
+            "the room list in the Runtime context. Never call it just because a room was mentioned.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam("string", "A concise 5-10 word summary of what this tool call does, shown to the user (e.g. 'Move to the bathroom'). Use the same language as the user."),
+            "room" to AgentToolParam("string", "Room to move to, exactly as named in the room list (e.g. 浴室)."),
+        ),
+        required = listOf("tool_title", "room"),
+        propertyOrdering = listOf("tool_title", "room"),
     )
 
     // Aligned with iOS AIChatViewModel.swift:5059-5067

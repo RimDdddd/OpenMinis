@@ -71,6 +71,7 @@ import androidx.compose.material.icons.outlined.AddComment
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOff
+import androidx.compose.material.icons.outlined.MeetingRoom
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Book
@@ -511,6 +512,9 @@ fun SessionListScreen(
     onRootfsClick: () -> Unit = {},
     // [T-android-scheduled-tasks-design] Entry to the scheduled-tasks list.
     onScheduledTasksClick: () -> Unit = {},
+    /** [T-rooms] 这间屋子：谁站在哪个房间。全局的，不属于某个会话 —— 所以
+     *  入口在主页工具栏上，不塞进某个聊天里。 */
+    onRoomsClick: () -> Unit = {},
     /**
      * [T-android-tablet-split] The session currently shown in the detail pane,
      * highlighted in the list. Non-null only in two-pane (tablet) mode — in
@@ -864,6 +868,14 @@ fun SessionListScreen(
                             )
                         }
                     } else {
+                        // [T-rooms] 谁在哪儿。排在计划任务左边：屋子是个地方，
+                        // 不是一件任务。
+                        IconButton(onClick = onRoomsClick) {
+                            Icon(
+                                Icons.Outlined.MeetingRoom,
+                                contentDescription = stringResource(R.string.sessionlist_rooms),
+                            )
+                        }
                         // [T-android-scheduled-tasks-design] Scheduled-tasks entry,
                         // sits to the left of the Shell button on the home toolbar.
                         // [T-android-scheduled-tasks-full] Badge shows the count of

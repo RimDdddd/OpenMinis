@@ -158,6 +158,7 @@ import androidx.compose.material.icons.outlined.Handyman
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.MeetingRoom
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Delete
 import com.openminis.app.ui.components.MinisIcons
@@ -543,6 +544,9 @@ fun ChatScreen(
      *  new-chat button), replacing this chat on the back stack. */
     onNewChat: () -> Unit = {},
     onOpenTerminal: () -> Unit = {},
+    /** [T-rooms] Open the room grid from the "..." menu — where everyone is
+     *  standing, and where tapping a room walks the user into it. */
+    onOpenRooms: () -> Unit = {},
     /** Open the in-app terminal with [command] pre-filled at the prompt
      *  (no trailing newline — the user reviews and presses Enter manually).
      *  Wired to the top-right Terminal button on a shell_execute ToolDetailSheet. */
@@ -3275,6 +3279,18 @@ fun ChatScreen(
                                 },
                                 leadingIcon = {
                                     MenuItemIcon(Icons.Outlined.Terminal)
+                                },
+                            )
+                            // [T-rooms] 房间格子图。挨着终端：两个都是"我在哪儿"，
+                            // 不是对话动作。
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_menu_rooms)) },
+                                onClick = {
+                                    showChatMenu = false
+                                    onOpenRooms()
+                                },
+                                leadingIcon = {
+                                    MenuItemIcon(Icons.Outlined.MeetingRoom)
                                 },
                             )
                             // Open Browser (iOS parity)

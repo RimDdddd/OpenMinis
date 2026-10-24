@@ -6190,6 +6190,20 @@ class ChatViewModel(
             return
         }
         viewModelScope.launch {
+            // [T-rooms] 第一次进会话就把位置表写出来。之前只有打开地图页才
+            // seed，结果提示词说"你在米米书房"、沙箱里却连 rooms.json 都没有。
+            // 不等待：写一个小 json，失败也不影响会话。
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching {
+                    com.openminis.app.rooms.RoomLocationStore.seedIfMissing(
+                        context,
+                        listOf(
+                            com.openminis.app.rooms.RoomLocationStore.USER_KEY,
+                            com.openminis.app.rooms.RoomLocationStore.CHARACTER_KEY,
+                        ),
+                    )
+                }
+            }
             // [T-HANG-DIAG] timing markers to localise where session entry
             // stalls. Sentinel-tagged so a single grep -v can strip them
             // when this diagnostic is removed. Declared OUTSIDE the try
@@ -13127,6 +13141,7 @@ class ChatViewModel(
                     toolDisabledResult("browser_use")
                 }
             "memory_write" -> executeMemoryWriteTool(argsJson)
+            "move_room" -> executeMoveRoomTool(argsJson)
             // [T-sub-agents-v1] One tool, five actions. The legacy names are
             // accepted so a replayed call from a transcript written before the
             // rename still dispatches instead of hitting "Unknown tool".
@@ -14496,6 +14511,31 @@ class ChatViewModel(
         return out.toByteArray()
     }
 
+    /**
+     * [T-rooms] Write her position into `rooms.json`.
+     *
+     * Deliberately does NOT touch the conversation: a move is a state change,
+     * so it shows up in the next request's Runtime context (and on the map)
+     * rather than as a chat bubble. The reply the model gets back names where
+     * everyone is afterwards, which is what lets it react naturally ("你也在
+     * 浴室") in the same turn instead of guessing.
+     */
+    private fun executeMoveRoomTool(argsJson: String): ToolExecutionResult {
+        val room = runCatching { JSONObject(argsJson).optString("room", "").trim() }.getOrDefault("")
+        if (room.isEmpty()) {
+            return ToolExecutionResult("Error: 'room' is required.", false, toolTitle = "Move room")
+        }
+        val store = com.openminis.app.rooms.RoomLocationStore
+        val snap = store.moveTo(context, store.CHARACTER_KEY, room)
+        val myRoom = snap.roomOf(store.CHARACTER_KEY)
+        val userRoom = snap.roomOf(store.USER_KEY)
+        val body = buildString {
+            append("Moved to ").append(myRoom).append(".")
+            append(" 川 is in ").append(userRoom).append(".")
+        }
+        return ToolExecutionResult(body, true, toolTitle = "Move to $myRoom")
+    }
+
     private fun executeMemoryWriteTool(argsJson: String): ToolExecutionResult {
         val repo = memoryRepository ?: return ToolExecutionResult("Error: Memory not available", false)
         if (!_memoryEnabled.value) {
@@ -15065,6 +15105,8 @@ class ChatViewModel(
         // follow-up could land on a different minute and pay full ingestion.
         val today = java.time.LocalDate.now()
         val dateStr = today.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
+        // [T-rooms] 只要小时，不要分：分钟级变化太勤，一小时一变才值得进提示词。
+        val timeStr = java.time.LocalTime.now().hour.toString() + "点"
         val tzId = java.util.TimeZone.getDefault().id
         val lang = context.resources.configuration.locales[0].toLanguageTag()
 
@@ -15320,10 +15362,27 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
             // Runtime context goes last so the prefix above stays byte-stable
             // across requests within the same day. Keep ordering deterministic
             // (date → tz → lang → model count) — any reorder defeats the cache.
+            // [T-rooms] 每小时变一次的那一行排在整段最末，见下面。
             append("\n\nRuntime context:\n")
             append("- Current date: ").append(dateStr).append(" (").append(tzId).append(")\n")
             append("- Device language: ").append(lang).append("\n")
             append("- minis-model-use models available: ").append(modelUseCount)
+            // [T-rooms] 位置跟时钟一样是状态，放在尾巴最末：走动只失效尾部，
+            // 前面可缓存的大段不用重算。两行 —— 房间清单（没去过的房间也能
+            // 叫出名字）和谁站在哪儿。
+            runCatching {
+                val store = com.openminis.app.rooms.RoomLocationStore
+                val roomSnap = store.snapshot(context)
+                append("\n")
+                append("- Rooms: ").append(roomSnap.rooms.joinToString(" / ")).append("\n")
+                append("- You are in ").append(roomSnap.roomOf(store.CHARACTER_KEY))
+                append(". 川 is in ").append(roomSnap.roomOf(store.USER_KEY)).append(".")
+                append(" Position is state: move_room only when you actually go somewhere.")
+            }
+            // [T-rooms] 时间排在整段最末：它每小时变一次，放在后面才没有东西被
+            // 它连累 —— 变一次只失效这一行，位置动了也顶多带走两行。
+            append("\n")
+            append("- Current time: ").append(timeStr)
         }
     }
 
@@ -17513,6 +17572,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
         "browser_use" -> "Browse Web"
         "read_image" -> "Read Image"
         "memory_write" -> "Write Memory"
+        "move_room" -> "Move Room"
         "memory_get" -> "Read Memory"
         "web_search" -> "Search Web"
         else -> toolName
