@@ -150,7 +150,7 @@ object RoomLocationStore {
             // 两遍：先找写着"谁的"的屋（米米的卧室、川的卧室），找不到再退回
             // 名字只是出现在房间名里那种（米米书房）—— 否则"米米书房"会先命中。
             val rooms = snapshot(context).rooms
-            rooms.firstOrNull { it.contains("$name的") }?.let { return it }
+            rooms.firstOrNull { it.contains("${name}的") }?.let { return it }
             rooms.firstOrNull { it.contains(name) }?.let { return it }
         }
         return DEFAULT_ROOM
