@@ -640,11 +640,6 @@ internal fun buildFlatChatItems(
     // prefix so the defensive key-collision suffixing behaves exactly as a
     // single full build would.
     seedKeys: Set<String> = emptySet(),
-    // [T-persona-phase2] Group chats always draw the speaker header, even when
-    // the same character follows herself: two consecutive turns by 妙妙 are two
-    // turns, and folding the second one under the first one's name is exactly
-    // the "who said this" confusion this feature exists to remove.
-    alwaysHeader: Boolean = false,
 ): List<FlatChatItem> {
     val out = mutableListOf<FlatChatItem>()
     val usedKeys = if (seedKeys.isEmpty()) mutableSetOf() else seedKeys.toMutableSet()
@@ -773,7 +768,7 @@ internal fun buildFlatChatItems(
         // (one turn split by a cancel) is a continuation; a group chat's next
         // character is a new speaker and needs her own header, even though the
         // previous row is also an assistant message.
-        val isResumeContinuation = !alwaysHeader && prevNonSystem?.role == "assistant" &&
+        val isResumeContinuation = prevNonSystem?.role == "assistant" &&
             prevNonSystem.speakerId == message.speakerId
         if (!isSystem && !isResumeContinuation) {
             out.add(dedupe(FlatChatItem.AssistantHeader(message.id, message.speakerId)))

@@ -1237,9 +1237,6 @@
     <string name="chat_menu_clear_chat">清空对话</string>
     <string name="chat_menu_open_terminal">打开终端</string>
     <string name="chat_menu_rooms">房间</string>
-    <string name="chat_menu_group_members">群聊成员</string>
-    <string name="chat_menu_group_closing">聊三轮后结尾</string>
-    <string name="chat_menu_group_continue">让他们聊</string>
     <string name="sessionlist_rooms">房间</string>
     <string name="rooms_title">房间</string>
     <string name="rooms_you_are_in">你在 %1$s</string>
