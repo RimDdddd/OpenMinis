@@ -108,6 +108,32 @@ object RoomLocationStore {
     }
 
     /**
+     * [T-persona-phase2] Drop positions whose owner no longer exists.
+     *
+     * The file is written by several code paths over months of builds: a
+     * session id that was once treated as a persona, a character that was
+     * renamed or deleted. Those entries keep naming a room in the prompt for a
+     * person who is not in the house — and since an unknown id has no SOUL, it
+     * resolves to the DEFAULT name and the prompt claims "Minis is in …".
+     *
+     * Rooms are left alone: a room is a folder, not a row that can go stale.
+     */
+    fun pruneUnknown(context: Context, validKeys: Set<String>): Snapshot {
+        synchronized(this) {
+            val current = snapshot(context)
+            val kept = current.positions.filterKeys { key ->
+                key == USER_KEY || validKeys.contains(key)
+            }
+            if (kept.size == current.positions.size) return current
+            val next = Snapshot(current.rooms, kept)
+            runCatching { write(context, next) }
+            cached = next
+            cachedStamp = runCatching { file(context).lastModified() }.getOrDefault(0L)
+            return next
+        }
+    }
+
+    /**
      * [T-rooms] Merge rooms discovered on disk into the map.
      *
      * A room IS a folder the user created, so the folder list is the source of

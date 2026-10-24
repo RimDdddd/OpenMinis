@@ -155,6 +155,19 @@ class ChatViewModel(
      */
     val personaIdFlow: kotlinx.coroutines.flow.StateFlow<String?> = _personaId.asStateFlow()
 
+    /**
+     * [T-persona-phase2] Ids that actually exist as characters (plus the two
+     * sentinels). Refreshed when a session loads.
+     *
+     * Position entries for an id that is NOT in here are leftovers — a session
+     * id, a renamed character, a key written by an older build. They have no
+     * SOUL, so looking their name up yields the DEFAULT name ("Minis") and the
+     * prompt ends up telling her that a character called Minis is standing in
+     * another room.
+     */
+    @Volatile
+    private var knownPersonaIds: Set<String> = emptySet()
+
     /** The character this turn belongs to — the session's own persona. */
     private fun effectivePersonaId(): String? = _personaId.value
 
@@ -5947,6 +5960,19 @@ class ChatViewModel(
                 }.getOrNull().orEmpty()
                 com.openminis.app.agent.SoulStore.ensurePersonaFile(context, rowPersona, personaName)
                 com.openminis.app.agent.SoulStore.refreshCache(context, rowPersona)
+            }
+            // [T-persona-phase2] Which ids are real characters — the position
+            // block uses this to skip stale keys instead of naming them "Minis".
+            knownPersonaIds = runCatching {
+                (context.applicationContext as? com.openminis.app.MinisApp)
+                    ?.database?.personaDao()?.getAll()?.map { it.id }?.toSet()
+            }.getOrNull().orEmpty()
+            // 位置文件里认不出来的 key 直接清掉，别留着给提示词添乱。
+            runCatching {
+                com.openminis.app.rooms.RoomLocationStore.pruneUnknown(
+                    context,
+                    knownPersonaIds + com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME,
+                )
             }
         }
         loadSession()
@@ -15618,12 +15644,24 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
                 val myRoom = roomSnap.roomOf(myKey)
                 val others = roomSnap.positions.keys
                     .filter { it != myKey }
+                    .filter { k ->
+                        k == com.openminis.app.rooms.RoomLocationStore.USER_KEY ||
+                            k == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME ||
+                            knownPersonaIds.contains(k)
+                    }
                     .sorted()
                     .joinToString(" ") { k ->
                         val who = if (k == com.openminis.app.rooms.RoomLocationStore.USER_KEY) {
                             "川 (the user)"
                         } else {
-                            com.openminis.app.agent.SoulStore.cachedMetadataFor(k).value.name
+                            // 没写名字的角色会落到默认名 "Minis"，读起来像系统在
+                            // 这屋里走来走去。宁可写"未命名角色"。
+                            val n = com.openminis.app.agent.SoulStore.cachedMetadataFor(k).value.name
+                            if (n.isBlank() || n == com.openminis.app.agent.SoulMetadata.DEFAULT.name) {
+                                "未命名角色"
+                            } else {
+                                n
+                            }
                         }
                         "$who is in ${roomSnap.roomOf(k)}."
                     }
