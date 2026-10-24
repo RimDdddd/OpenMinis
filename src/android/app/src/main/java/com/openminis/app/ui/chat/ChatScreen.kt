@@ -4375,7 +4375,6 @@ fun ChatScreen(
                             })
                         }
                     }
-                    }
                     items(
                         items = flatItems.asReversed(),
                         key = { it.key },
