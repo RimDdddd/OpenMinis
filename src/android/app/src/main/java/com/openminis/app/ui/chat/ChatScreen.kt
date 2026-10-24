@@ -657,16 +657,6 @@ fun ChatScreen(
     // [T-persona-phase2] "the next character speaks in N seconds" — drives the
     // thin waiting bar. Null the rest of the time, so single chats render
     // exactly as before.
-    val groupTyping by viewModel.groupTyping.collectAsState()
-    // [T-persona-phase2] Visible countdown: pressing "wrap up in 3 rounds" used
-    // to change nothing on screen, so there was no way to tell it had taken.
-    val groupRoundsLeft by viewModel.groupRoundsRemaining.collectAsState()
-    var showGroupMembersDialog by remember { mutableStateOf(false) }
-    // [T-persona-phase2] Deliberately NOT auto-starting on open: looking at a
-    // conversation must not cost a round of tokens. A group 川 is not part of
-    // starts from the ⋮ menu ("让他们聊"), and the same entry resumes it after
-    // a stop.
-    val groupParticipants by viewModel.groupParticipants.collectAsState()
     val error by viewModel.error.collectAsState()
     val modelName by viewModel.modelName.collectAsState()
     val sessionTitle by viewModel.sessionTitle.collectAsState()
@@ -3353,65 +3343,6 @@ fun ChatScreen(
                                     MenuItemIcon(Icons.Outlined.MeetingRoom)
                                 },
                             )
-                            // [T-persona-phase2] Start (or resume, after a stop)
-                            // a round without a user message — the only way a
-                            // group 川 is not part of can continue.
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.chat_menu_group_continue)) },
-                                onClick = {
-                                    showChatMenu = false
-                                    if (isStreaming) {
-                                        // [T-persona-phase2] A tap during a turn
-                                        // used to do nothing at all, which reads
-                                        // as a broken button.
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            "正在说，等这一句说完",
-                                            android.widget.Toast.LENGTH_SHORT,
-                                        ).show()
-                                    } else {
-                                        viewModel.startGroupChat()
-                                    }
-                                },
-                                leadingIcon = {
-                                    MenuItemIcon(Icons.Default.PlayArrow)
-                                },
-                            )
-                            // [T-persona-phase2] "Wrap up in three rounds": arm a
-                            // countdown; the sixth line closes the conversation.
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (groupRoundsLeft == null) {
-                                            stringResource(R.string.chat_menu_group_closing)
-                                        } else {
-                                            "还剩 $groupRoundsLeft 轮 · 点一下取消"
-                                        },
-                                    )
-                                },
-                                onClick = {
-                                    showChatMenu = false
-                                    // No toast here: the menu item's own label
-                                    // already shows the countdown ("还剩 N 轮").
-                                    viewModel.armGroupClosing(
-                                        if (viewModel.groupRoundsRemaining.value == null) 3 else null,
-                                    )
-                                },
-                                leadingIcon = {
-                                    MenuItemIcon(Icons.Outlined.Timer)
-                                },
-                            )
-                            // [T-persona-phase2] Who takes part in this room.
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.chat_menu_group_members)) },
-                                onClick = {
-                                    showChatMenu = false
-                                    showGroupMembersDialog = true
-                                },
-                                leadingIcon = {
-                                    MenuItemIcon(Icons.Outlined.Groups)
-                                },
-                            )
                             // Open Browser (iOS parity)
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.chat_menu_open_browser)) },
@@ -3943,7 +3874,7 @@ fun ChatScreen(
                                     // threw ConcurrentModificationException from
                                     // a later frame's SubList.equals. Copying
                                     // severs the view so it can't comodify.
-                                    buildFlatChatItems(msgs.take(splitIdx), sessionId, alwaysHeader = groupParticipants.size > 1)
+                                    buildFlatChatItems(msgs.take(splitIdx), sessionId)
                                 }
                                 val buildMs = (System.nanoTime() - tBuildStart) / 1_000_000
                                 frozenRows = rows
@@ -4019,7 +3950,7 @@ fun ChatScreen(
                             } else {
                                 withContext(Dispatchers.Default) {
                                     val merged = mergeStreamingOverlay(msgs, stream)
-                                    buildFlatChatItems(merged, null, fromIndex = splitIdx, seedKeys = frozenKeys, alwaysHeader = groupParticipants.size > 1)
+                                    buildFlatChatItems(merged, null, fromIndex = splitIdx, seedKeys = frozenKeys)
                                 }
                             }
                             flatItems = if (liveRows.isEmpty()) frozenRows else frozenRows + liveRows
@@ -4444,14 +4375,6 @@ fun ChatScreen(
                             })
                         }
                     }
-                    // [T-persona-phase2] Group turn pending: the next speaker
-                    // is not thinking yet, they are waiting their turn. The bar
-                    // is the difference between "she is composing" and "the app
-                    // hung for fifteen seconds".
-                    groupTyping?.let { typing ->
-                        item(key = "__group_typing__", contentType = "group_typing") {
-                            GroupTypingBar(typing)
-                        }
                     }
                     items(
                         items = flatItems.asReversed(),
@@ -7587,20 +7510,6 @@ fun ChatScreen(
             // T137: Clear Chat confirmation. Wipes messages + agent history +
             // compact markers; the session row, workspace files, attachments,
             // and offload payloads are intentionally preserved (iOS parity).
-            if (showGroupMembersDialog) {
-                GroupMembersDialog(
-                    current = viewModel.groupParticipants.collectAsState().value,
-                    gap = viewModel.groupGapSeconds.collectAsState().value,
-                    onGapChange = { viewModel.setGroupGapSeconds(it) },
-                    onDismiss = { showGroupMembersDialog = false },
-                    onConfirm = { ids ->
-                        showGroupMembersDialog = false
-                        // setGroupParticipants writes the db; the dialog closes
-                        // first so the tap feels instant even on a slow disk.
-                        coroutineScope.launch { viewModel.setGroupParticipants(ids) }
-                    },
-                )
-            }
             if (showClearChatDialog) {
                 MinisAlertDialog(
                     onDismissRequest = { showClearChatDialog = false },
@@ -8182,151 +8091,4 @@ private fun hasFloatingToolStatus(
 
     if (messages.any { it.role == "assistant" && blocksCarryStatus(it.toolBlocks) }) return true
     return streaming.values.any { blocksCarryStatus(it.toolBlocks) }
-}
-
-
-/**
- * [T-persona-phase2] The thin bar between two characters' turns in a group.
- *
- * Driven by one [Animatable] over the whole wait, not by a ticking state: the
- * animation runs on the UI thread at frame rate, so a 15-second wait costs one
- * coroutine instead of 900 recompositions.
- */
-@Composable
-private fun GroupTypingBar(typing: ChatViewModel.GroupTyping) {
-    val ratio = remember(typing.speakerKey, typing.startedAt) { Animatable(0f) }
-    LaunchedEffect(typing.speakerKey, typing.startedAt) {
-        ratio.snapTo(0f)
-        ratio.animateTo(
-            targetValue = 1f,
-            animationSpec = tween(
-                durationMillis = typing.totalMs.toInt().coerceAtLeast(1),
-                easing = LinearEasing,
-            ),
-        )
-    }
-    val name = if (typing.speakerKey == com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME) {
-        com.openminis.app.agent.SoulStore.cachedMetadataFor(null).value.name
-    } else {
-        com.openminis.app.agent.SoulStore.cachedMetadataFor(typing.speakerKey).value.name
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-    ) {
-        Text(
-            text = "$name 马上开口",
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(5.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(2.dp)
-                .clip(RoundedCornerShape(1.dp))
-                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(ratio.value.coerceIn(0f, 1f))
-                    .fillMaxHeight()
-                    .background(MaterialTheme.colorScheme.primary),
-            )
-        }
-    }
-}
-
-
-/**
- * [T-persona-phase2] Pick who is in the room.
- *
- * The default character has no row in `personas` (its absence IS the row), so
- * she is listed first under her sentinel key and cannot be removed from the
- * list — a group without her is a different feature, not a smaller group.
- */
-@Composable
-private fun GroupMembersDialog(
-    current: List<String>,
-    gap: Int,
-    onGapChange: (Int) -> Unit,
-    onDismiss: () -> Unit,
-    onConfirm: (List<String>) -> Unit,
-) {
-    val context = LocalContext.current
-    var people by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    LaunchedEffect(Unit) {
-        val app = context.applicationContext as? com.openminis.app.MinisApp
-        val rows = runCatching { app?.database?.personaDao()?.getAll() }.getOrNull().orEmpty()
-        people = buildList {
-            // 川 is a member like any other: unchecking him is what turns a
-            // two-character conversation into the two of them talking alone.
-            add(RoomLocationStore.USER_KEY to "川")
-            add(
-                com.openminis.app.agent.SoulStore.DEFAULT_PERSONA_DIR_NAME to
-                    com.openminis.app.agent.SoulStore.cachedMetadataFor(null).value.name,
-            )
-            rows.forEach { add(it.id to it.name) }
-        }
-    }
-    val selected = remember(people, current) {
-        mutableStateListOf<String>().apply { addAll(current) }
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("群聊成员") },
-        text = {
-            Column {
-                Text(
-                    "勾两个人以上，这一轮里就按顺序各说一句。",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                people.forEach { (id, name) ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                if (selected.contains(id)) selected.remove(id) else selected.add(id)
-                            }
-                            .padding(vertical = 4.dp),
-                    ) {
-                        Checkbox(
-                            checked = selected.contains(id),
-                            onCheckedChange = { on ->
-                                if (on) { if (!selected.contains(id)) selected.add(id) }
-                                else selected.remove(id)
-                            },
-                        )
-                        Text(name, fontSize = 14.sp)
-                    }
-                }
-                Spacer(Modifier.height(14.dp))
-                Text(
-                    "两人之间隔 ${gap} 秒",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(3, 8, 15, 30, 60, 120).forEach { sec ->
-                        FilterChip(
-                            selected = gap == sec,
-                            onClick = { onGapChange(sec) },
-                            label = { Text("${sec}s", fontSize = 11.sp) },
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(selected.toList()) }) { Text("好") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
-    )
 }
